@@ -106,6 +106,9 @@ endif()
 
 target_compile_definitions(InspireFace PUBLIC INFERENCE_WRAPPER_ENABLE_MNN)
 target_compile_definitions(InspireFace PUBLIC FEATURE_BLOCK_ENABLE_OPENCV)
+if(ISF_ENABLE_INSPIRECV_TASK_PREPROCESS)
+    target_compile_definitions(InspireFace PRIVATE ISF_ENABLE_INSPIRECV_TASK_PREPROCESS)
+endif()
 
 # Include files
 set(NEED_INCLUDE . ${MNN_INCLUDE_DIRS})

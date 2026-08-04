@@ -176,6 +176,10 @@ option(ISF_BUILD_WITH_TEST "Open Build Unit-Test." ON)
 # If you want to build the sample, you need to set this to ON
 option(ISF_BUILD_WITH_SAMPLE "Open Build Sample Exec." ON)
 
+# Keep the migration opt-in until InspireCV Task preprocessing has passed the
+# same end-to-end accuracy and performance gates as MNN ImageProcess.
+option(ISF_ENABLE_INSPIRECV_TASK_PREPROCESS "Use InspireCV Task API for image preprocessing." OFF)
+
 set(SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/cpp/)
 
 option(ISF_NEVER_USE_OPENCV "Never use opencv." ON)
@@ -268,8 +272,12 @@ endif ()
 
 # InspireCV dependency configuration
 set(INSPIRECV_BUILD_OBJECT_LIBS ON CACHE BOOL "Build InspireCV as object library")
-add_subdirectory(${ISF_THIRD_PARTY_DIR}/InspireCV EXCLUDE_FROM_ALL)
-set(INSPIRECV_INCLUDE_PATH "${ISF_THIRD_PARTY_DIR}/InspireCV/include")
+set(ISF_INSPIRECV_SOURCE_DIR "${ISF_THIRD_PARTY_DIR}/InspireCV" CACHE PATH "InspireCV source directory")
+if(NOT EXISTS "${ISF_INSPIRECV_SOURCE_DIR}/CMakeLists.txt")
+    message(FATAL_ERROR "Invalid ISF_INSPIRECV_SOURCE_DIR: ${ISF_INSPIRECV_SOURCE_DIR}")
+endif()
+add_subdirectory(${ISF_INSPIRECV_SOURCE_DIR} ${CMAKE_BINARY_DIR}/InspireCV EXCLUDE_FROM_ALL)
+set(INSPIRECV_INCLUDE_PATH "${ISF_INSPIRECV_SOURCE_DIR}/include")
 set(INSPIRECV_LIBS InspireCV)
 
 # If you need using CUDA-enabled MNN, you need to manually configure the pre-compiled CUDA-enabled MNN library path
