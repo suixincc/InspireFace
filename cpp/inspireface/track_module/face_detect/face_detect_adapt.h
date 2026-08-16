@@ -81,14 +81,6 @@ private:
     int m_input_size_;       ///< Input size for the neural network model.
 };
 
-/**
- * @brief Sorts FaceLoc objects in descending order of area.
- * @param a The first FaceLoc object.
- * @param b The second FaceLoc object.
- * @return bool True if 'a' is larger than 'b'.
- */
-bool SortBoxSizeAdapt(const FaceLoc &a, const FaceLoc &b);
-
 }  // namespace inspire
 
 #endif  // INSPIRE_FACE_TRACK_MODULE_FACE_DETECT_FACE_DETECT_ADAPT_H

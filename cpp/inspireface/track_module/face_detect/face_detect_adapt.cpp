@@ -141,7 +141,6 @@ void FaceDetectAdapt::_decode(const std::vector<float> &cls_pred, const std::vec
             //            }
             results.push_back(faceInfo);
         }
-        std::sort(results.begin(), results.end(), SortBoxSizeAdapt);
     }
 }
 
@@ -151,12 +150,6 @@ void FaceDetectAdapt::SetNmsThreshold(float mNmsThreshold) {
 
 void FaceDetectAdapt::SetClsThreshold(float mClsThreshold) {
     m_cls_threshold_ = mClsThreshold;
-}
-
-bool SortBoxSizeAdapt(const FaceLoc &a, const FaceLoc &b) {
-    int sq_a = (a.y2 - a.y1) * (a.x2 - a.x1);
-    int sq_b = (b.y2 - b.y1) * (b.x2 - b.x1);
-    return sq_a > sq_b;
 }
 
 int FaceDetectAdapt::GetInputSize() const {

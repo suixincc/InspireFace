@@ -45,6 +45,14 @@ set_target_properties(FaceTrackBenchmarkSample PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/sample/api/"
 )
 
+# End-to-end correctness/performance guard for internal face-detector changes.
+# It is a sample target so the same benchmark can run on deployment toolchains.
+add_executable(FaceDetectPostprocessBenchmarkSample benchmark/face_detect_postprocess_benchmark.cpp)
+target_link_libraries(FaceDetectPostprocessBenchmarkSample InspireFace ${ext})
+set_target_properties(FaceDetectPostprocessBenchmarkSample PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/sample/benchmark/"
+)
+
 # Examples of face recognition
 add_executable(FaceComparisonSample api/sample_face_comparison.c)
 target_link_libraries(FaceComparisonSample InspireFace ${ext})
