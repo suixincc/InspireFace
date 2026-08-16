@@ -92,6 +92,11 @@ private:
     bool TrackFace(inspirecv::FrameProcess &image, FaceObjectInternal &face);
 
     /**
+     * @brief Moves detected candidate faces into the active tracking list while preserving their order.
+     */
+    void AppendCandidateFaces();
+
+    /**
      * @brief Blacks out the region specified in the image for tracking.
      * @param image Image in which the region needs to be blacked out.
      * @param rect_mask Rectangle specifying the region to black out.

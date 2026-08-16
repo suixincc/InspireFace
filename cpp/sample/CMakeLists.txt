@@ -53,6 +53,24 @@ set_target_properties(FaceDetectPostprocessBenchmarkSample PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/sample/benchmark/"
 )
 
+add_executable(FaceTrackNmsBenchmarkSample benchmark/face_track_nms_benchmark.cpp)
+target_link_libraries(FaceTrackNmsBenchmarkSample InspireFace ${ext})
+set_target_properties(FaceTrackNmsBenchmarkSample PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/sample/benchmark/"
+)
+
+add_executable(FaceTrackCandidateBenchmarkSample benchmark/face_track_candidate_benchmark.cpp)
+target_link_libraries(FaceTrackCandidateBenchmarkSample InspireFace ${ext})
+set_target_properties(FaceTrackCandidateBenchmarkSample PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/sample/benchmark/"
+)
+
+add_executable(FaceLandmarkSmoothingBenchmarkSample benchmark/face_landmark_smoothing_benchmark.cpp)
+target_link_libraries(FaceLandmarkSmoothingBenchmarkSample InspireFace ${ext})
+set_target_properties(FaceLandmarkSmoothingBenchmarkSample PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/sample/benchmark/"
+)
+
 # Examples of face recognition
 add_executable(FaceComparisonSample api/sample_face_comparison.c)
 target_link_libraries(FaceComparisonSample InspireFace ${ext})

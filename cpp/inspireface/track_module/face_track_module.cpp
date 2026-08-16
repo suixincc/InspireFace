@@ -7,6 +7,7 @@
 #include "log.h"
 #include <algorithm>
 #include <cstddef>
+#include <utility>
 #include "middleware/costman.h"
 #include "middleware/model_archive/inspire_archive.h"
 #include "middleware/utils.h"
@@ -223,6 +224,17 @@ bool FaceTrackModule::TrackFace(inspirecv::FrameProcess &image, FaceObjectIntern
     return true;
 }
 
+void FaceTrackModule::AppendCandidateFaces() {
+    if (candidate_faces_.empty()) {
+        return;
+    }
+    trackingFace.reserve(trackingFace.size() + candidate_faces_.size());
+    for (FaceObjectInternal &candidate : candidate_faces_) {
+        trackingFace.push_back(std::move(candidate));
+    }
+    candidate_faces_.clear();
+}
+
 void FaceTrackModule::UpdateStream(inspirecv::FrameProcess &image) {
     inspire::SpendTimer total("UpdateStream");
     total.Start();
@@ -255,12 +267,7 @@ void FaceTrackModule::UpdateStream(inspirecv::FrameProcess &image) {
         detection_executed = true;
     }
 
-    if (!candidate_faces_.empty()) {
-        for (int i = 0; i < candidate_faces_.size(); i++) {
-            trackingFace.push_back(candidate_faces_[i]);
-        }
-        candidate_faces_.clear();
-    }
+    AppendCandidateFaces();
 
     // Record the number of faces before tracking
     size_t faces_before_tracking = trackingFace.size();
@@ -284,12 +291,7 @@ void FaceTrackModule::UpdateStream(inspirecv::FrameProcess &image) {
         detection_index_ = 0;
 
         // Add the detected faces to the tracking face list
-        if (!candidate_faces_.empty()) {
-            for (int i = 0; i < candidate_faces_.size(); i++) {
-                trackingFace.push_back(candidate_faces_[i]);
-            }
-            candidate_faces_.clear();
-        }
+        AppendCandidateFaces();
 
         // Track the faces  
         for (std::vector<FaceObjectInternal>::iterator iter = trackingFace.begin(); iter != trackingFace.end();) {
@@ -306,31 +308,40 @@ void FaceTrackModule::UpdateStream(inspirecv::FrameProcess &image) {
 }
 
 void FaceTrackModule::nms(float th) {
-    std::sort(trackingFace.begin(), trackingFace.end(), [](FaceObjectInternal a, FaceObjectInternal b) { return a.confidence_ > b.confidence_; });
-    std::vector<float> area(trackingFace.size());
-    for (int i = 0; i < int(trackingFace.size()); ++i) {
-        area[i] = trackingFace.at(i).getBbox().Area();
-    }
-    for (int i = 0; i < int(trackingFace.size()); ++i) {
-        for (int j = i + 1; j < int(trackingFace.size());) {
-            float xx1 = (std::max)(trackingFace[i].getBbox().GetX(), trackingFace[j].getBbox().GetX());
-            float yy1 = (std::max)(trackingFace[i].getBbox().GetY(), trackingFace[j].getBbox().GetY());
-            float xx2 = (std::min)(trackingFace[i].getBbox().GetX() + trackingFace[i].getBbox().GetWidth(),
-                                   trackingFace[j].getBbox().GetX() + trackingFace[j].getBbox().GetWidth());
-            float yy2 = (std::min)(trackingFace[i].getBbox().GetY() + trackingFace[i].getBbox().GetHeight(),
-                                   trackingFace[j].getBbox().GetY() + trackingFace[j].getBbox().GetHeight());
+    std::sort(trackingFace.begin(), trackingFace.end(),
+              [](const FaceObjectInternal &a, const FaceObjectInternal &b) { return a.confidence_ > b.confidence_; });
+
+    FaceObjectInternalList retained_faces;
+    std::vector<float> retained_areas;
+    retained_faces.reserve(trackingFace.size());
+    retained_areas.reserve(trackingFace.size());
+
+    for (FaceObjectInternal &candidate : trackingFace) {
+        const auto &candidate_bbox = candidate.getBbox();
+        const float candidate_area = candidate_bbox.Area();
+        bool suppressed = false;
+        for (size_t i = 0; i < retained_faces.size(); ++i) {
+            const auto &retained_bbox = retained_faces[i].getBbox();
+            float xx1 = (std::max)(retained_bbox.GetX(), candidate_bbox.GetX());
+            float yy1 = (std::max)(retained_bbox.GetY(), candidate_bbox.GetY());
+            float xx2 = (std::min)(retained_bbox.GetX() + retained_bbox.GetWidth(), candidate_bbox.GetX() + candidate_bbox.GetWidth());
+            float yy2 = (std::min)(retained_bbox.GetY() + retained_bbox.GetHeight(), candidate_bbox.GetY() + candidate_bbox.GetHeight());
             float w = (std::max)(float(0), xx2 - xx1 + 1);
             float h = (std::max)(float(0), yy2 - yy1 + 1);
             float inter = w * h;
-            float ovr = inter / (area[i] + area[j] - inter);
+            float ovr = inter / (retained_areas[i] + candidate_area - inter);
             if (ovr >= th) {
-                trackingFace.erase(trackingFace.begin() + j);
-                area.erase(area.begin() + j);
-            } else {
-                j++;
+                suppressed = true;
+                break;
             }
         }
+        if (!suppressed) {
+            retained_faces.push_back(std::move(candidate));
+            retained_areas.push_back(candidate_area);
+        }
     }
+
+    trackingFace.swap(retained_faces);
 }
 
 void FaceTrackModule::BlackingTrackingRegion(inspirecv::Image &image, inspirecv::Rect2f &rect_mask) {
@@ -361,15 +372,18 @@ void FaceTrackModule::DetectFace(const inspirecv::Image &input, float scale) {
             objects.push_back(obj);
         }
         std::vector<STrack> output_stracks = m_TbD_tracker_->update(objects);
+        candidate_faces_.reserve(candidate_faces_.size() + output_stracks.size());
         for (const auto &st_track : output_stracks) {
             inspirecv::Rect<int> rect = inspirecv::Rect<int>(st_track.tlwh[0], st_track.tlwh[1], st_track.tlwh[2], st_track.tlwh[3]);
-            FaceObjectInternal faceinfo(st_track.track_id, rect, FaceLandmarkAdapt::NUM_OF_LANDMARK + 10);
+            candidate_faces_.emplace_back(st_track.track_id, rect, FaceLandmarkAdapt::NUM_OF_LANDMARK + 10);
+            FaceObjectInternal &faceinfo = candidate_faces_.back();
             faceinfo.detect_bbox_ = rect.As<int>();
-            candidate_faces_.push_back(faceinfo);
         }
     } else {
         std::vector<inspirecv::Rect2i> bbox;
         bbox.resize(boxes.size());
+        const size_t remaining_capacity = max_detected_faces_ > candidate_faces_.size() ? max_detected_faces_ - candidate_faces_.size() : 0;
+        candidate_faces_.reserve(candidate_faces_.size() + std::min(boxes.size(), remaining_capacity));
         for (int i = 0; i < boxes.size(); i++) {
             bbox[i] = inspirecv::Rect<int>::Create(boxes[i].x1, boxes[i].y1, boxes[i].x2 - boxes[i].x1, boxes[i].y2 - boxes[i].y1);
 
@@ -384,16 +398,15 @@ void FaceTrackModule::DetectFace(const inspirecv::Image &input, float scale) {
                 tracking_idx_ = tracking_idx_ + 1;
             }
 
-            FaceObjectInternal faceinfo(tracking_idx_, bbox[i], m_landmark_param_->num_of_landmark + 10);
-            faceinfo.detect_bbox_ = bbox[i];
-            faceinfo.SetConfidence(boxes[i].score);
-
             // Control that the number of faces detected does not exceed the maximum limit
             if (candidate_faces_.size() >= max_detected_faces_) {
                 continue;
             }
 
-            candidate_faces_.push_back(faceinfo);
+            candidate_faces_.emplace_back(tracking_idx_, bbox[i], m_landmark_param_->num_of_landmark + 10);
+            FaceObjectInternal &faceinfo = candidate_faces_.back();
+            faceinfo.detect_bbox_ = bbox[i];
+            faceinfo.SetConfidence(boxes[i].score);
         }
     }
 }

@@ -74,72 +74,72 @@ FaceLocList FaceDetectAdapt::operator()(const inspirecv::Image &bgr) {
 }
 
 void FaceDetectAdapt::_nms(std::vector<FaceLoc> &input_faces, float nms_threshold) {
-    std::sort(input_faces.begin(), input_faces.end(), [](FaceLoc a, FaceLoc b) { return a.score > b.score; });
-    std::vector<float> area(input_faces.size());
-    for (int i = 0; i < int(input_faces.size()); ++i) {
-        area[i] = (input_faces.at(i).x2 - input_faces.at(i).x1 + 1) * (input_faces.at(i).y2 - input_faces.at(i).y1 + 1);
-    }
-    for (int i = 0; i < int(input_faces.size()); ++i) {
-        for (int j = i + 1; j < int(input_faces.size());) {
-            float xx1 = (std::max)(input_faces[i].x1, input_faces[j].x1);
-            float yy1 = (std::max)(input_faces[i].y1, input_faces[j].y1);
-            float xx2 = (std::min)(input_faces[i].x2, input_faces[j].x2);
-            float yy2 = (std::min)(input_faces[i].y2, input_faces[j].y2);
+    std::sort(input_faces.begin(), input_faces.end(), [](const FaceLoc &a, const FaceLoc &b) { return a.score > b.score; });
+    FaceLocList retained_faces;
+    std::vector<float> retained_areas;
+    retained_faces.reserve(input_faces.size());
+    retained_areas.reserve(input_faces.size());
+
+    for (const auto &candidate : input_faces) {
+        const float candidate_area = (candidate.x2 - candidate.x1 + 1) * (candidate.y2 - candidate.y1 + 1);
+        bool suppressed = false;
+        for (size_t i = 0; i < retained_faces.size(); ++i) {
+            const auto &retained = retained_faces[i];
+            float xx1 = (std::max)(retained.x1, candidate.x1);
+            float yy1 = (std::max)(retained.y1, candidate.y1);
+            float xx2 = (std::min)(retained.x2, candidate.x2);
+            float yy2 = (std::min)(retained.y2, candidate.y2);
             float w = (std::max)(float(0), xx2 - xx1 + 1);
             float h = (std::max)(float(0), yy2 - yy1 + 1);
             float inter = w * h;
-            float ovr = inter / (area[i] + area[j] - inter);
+            float ovr = inter / (retained_areas[i] + candidate_area - inter);
             if (ovr >= nms_threshold) {
-                input_faces.erase(input_faces.begin() + j);
-                area.erase(area.begin() + j);
-            } else {
-                j++;
+                suppressed = true;
+                break;
             }
         }
-    }
-}
-
-void FaceDetectAdapt::_generate_anchors(int stride, int input_size, int num_anchors, std::vector<float> &anchors) {
-    int height = ceil(input_size / stride);
-    int width = ceil(input_size / stride);
-    for (int j = 0; j < height; ++j) {
-        for (int i = 0; i < width; ++i) {
-            for (int k = 0; k < num_anchors; ++k) {
-                anchors.push_back(i * stride);
-                anchors.push_back(j * stride);
-            }
+        if (!suppressed) {
+            retained_faces.push_back(candidate);
+            retained_areas.push_back(candidate_area);
         }
     }
+    input_faces.swap(retained_faces);
 }
 
 void FaceDetectAdapt::_decode(const std::vector<float> &cls_pred, const std::vector<float> &box_pred, const std::vector<float> &lmk_pred, int stride,
                               std::vector<FaceLoc> &results) {
-    std::vector<float> anchors_center;
-    _generate_anchors(stride, m_input_size_, 2, anchors_center);
+    constexpr int kNumAnchors = 2;
+    const int feature_height = m_input_size_ / stride;
+    const int feature_width = m_input_size_ / stride;
+    int anchor_index = 0;
 
-    for (int i = 0; i < anchors_center.size() / 2; ++i) {
-        if (cls_pred[i] > m_cls_threshold_) {
-            FaceLoc faceInfo;
-            float cx = anchors_center[i * 2 + 0];
-            float cy = anchors_center[i * 2 + 1];
-            float x1 = cx - box_pred[i * 4 + 0] * stride;
-            float y1 = cy - box_pred[i * 4 + 1] * stride;
-            float x2 = cx + box_pred[i * 4 + 2] * stride;
-            float y2 = cy + box_pred[i * 4 + 3] * stride;
-            faceInfo.x1 = x1;
-            faceInfo.y1 = y1;
-            faceInfo.x2 = x2;
-            faceInfo.y2 = y2;
-            faceInfo.score = cls_pred[i];
-            //            if (use_kps_) {
-            for (int j = 0; j < 5; ++j) {
-                float px = cx + lmk_pred[i * 10 + j * 2 + 0] * stride;
-                float py = cy + lmk_pred[i * 10 + j * 2 + 1] * stride;
-                faceInfo.lmk[j * 2 + 0] = px;
-                faceInfo.lmk[j * 2 + 1] = py;
+    for (int y = 0; y < feature_height; ++y) {
+        for (int x = 0; x < feature_width; ++x) {
+            const float cx = static_cast<float>(x * stride);
+            const float cy = static_cast<float>(y * stride);
+            for (int anchor = 0; anchor < kNumAnchors; ++anchor, ++anchor_index) {
+                if (cls_pred[anchor_index] > m_cls_threshold_) {
+                    FaceLoc faceInfo;
+                    float x1 = cx - box_pred[anchor_index * 4 + 0] * stride;
+                    float y1 = cy - box_pred[anchor_index * 4 + 1] * stride;
+                    float x2 = cx + box_pred[anchor_index * 4 + 2] * stride;
+                    float y2 = cy + box_pred[anchor_index * 4 + 3] * stride;
+                    faceInfo.x1 = x1;
+                    faceInfo.y1 = y1;
+                    faceInfo.x2 = x2;
+                    faceInfo.y2 = y2;
+                    faceInfo.score = cls_pred[anchor_index];
+                    //            if (use_kps_) {
+                    for (int j = 0; j < 5; ++j) {
+                        float px = cx + lmk_pred[anchor_index * 10 + j * 2 + 0] * stride;
+                        float py = cy + lmk_pred[anchor_index * 10 + j * 2 + 1] * stride;
+                        faceInfo.lmk[j * 2 + 0] = px;
+                        faceInfo.lmk[j * 2 + 1] = py;
+                    }
+                    //            }
+                    results.push_back(faceInfo);
+                }
             }
-            //            }
-            results.push_back(faceInfo);
         }
     }
 }

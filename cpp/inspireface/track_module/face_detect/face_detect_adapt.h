@@ -56,15 +56,6 @@ private:
     static void _nms(FaceLocList &input_faces, float nms_threshold);
 
     /**
-     * @brief Generates detection anchors based on stride.
-     * @param stride The stride of the detection.
-     * @param input_size The size of the input image.
-     * @param num_anchors The number of anchors.
-     * @param anchors The generated anchors.
-     */
-    void _generate_anchors(int stride, int input_size, int num_anchors, std::vector<float> &anchors);
-
-    /**
      * @brief Decodes network outputs to face locations.
      * @param cls_pred Classification predictions.
      * @param box_pred Bounding box predictions.

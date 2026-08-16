@@ -31,6 +31,7 @@ struct DetectorConfig {
 };
 
 const std::vector<ImageCase> kImageCases = {
+  {"no_face", "data/bulk/view.jpg", {0, 0}, {0, 0}, {0, 0}},
   {"single_frontal", "data/bulk/kun.jpg", {1, 1}, {1, 1}, {1, 1}},
   {"single_profile", "data/pose/right_face.png", {1, 1}, {1, 1}, {1, 1}},
   {"single_raise_head", "data/pose/rise_face.jpeg", {1, 1}, {1, 1}, {1, 1}},
@@ -72,15 +73,24 @@ void HashBytes(uint64_t& hash, const void* data, size_t size) {
     }
 }
 
-uint64_t HashFaces(const HFMultipleFaceData& faces) {
-    uint64_t hash = 1469598103934665603ULL;
+bool HashFaces(const HFMultipleFaceData& faces, uint64_t& hash) {
+    hash = 1469598103934665603ULL;
     const uint64_t count = static_cast<uint64_t>(faces.detectedNum);
     HashBytes(hash, &count, sizeof(count));
     for (int i = 0; i < faces.detectedNum; ++i) {
         HashBytes(hash, &faces.rects[i], sizeof(faces.rects[i]));
         HashBytes(hash, &faces.detConfidence[i], sizeof(faces.detConfidence[i]));
+        HashBytes(hash, &faces.angles.roll[i], sizeof(faces.angles.roll[i]));
+        HashBytes(hash, &faces.angles.yaw[i], sizeof(faces.angles.yaw[i]));
+        HashBytes(hash, &faces.angles.pitch[i], sizeof(faces.angles.pitch[i]));
+
+        HPoint2f key_points[5] = {};
+        if (HFGetFaceFiveKeyPointsFromFaceToken(faces.tokens[i], key_points, 5) != HSUCCEED) {
+            return false;
+        }
+        HashBytes(hash, key_points, sizeof(key_points));
     }
-    return hash;
+    return true;
 }
 
 double Percentile(const std::vector<double>& sorted_samples, double percentile) {
@@ -120,7 +130,13 @@ bool RunCase(HFSession session, int input_size, const ImageCase& image_case, con
         HFReleaseImageBitmap(bitmap);
         return false;
     }
-    const uint64_t reference_hash = HashFaces(reference);
+    uint64_t reference_hash = 0;
+    if (!HashFaces(reference, reference_hash)) {
+        std::cerr << "ERROR,image=" << image_case.name << ",reason=result_hash_failed\n";
+        HFReleaseImageStream(stream);
+        HFReleaseImageBitmap(bitmap);
+        return false;
+    }
     const ExpectedCount expected = GetExpectedCount(image_case, input_size);
     const bool count_ok = reference.detectedNum >= expected.minimum && reference.detectedNum <= expected.maximum;
 
@@ -128,7 +144,8 @@ bool RunCase(HFSession session, int input_size, const ImageCase& image_case, con
     for (int i = 0; i < 3; ++i) {
         HFMultipleFaceData repeated = {0};
         status = HFExecuteFaceTrack(session, stream, &repeated);
-        if (status != HSUCCEED || HashFaces(repeated) != reference_hash) {
+        uint64_t repeated_hash = 0;
+        if (status != HSUCCEED || !HashFaces(repeated, repeated_hash) || repeated_hash != reference_hash) {
             repeat_ok = false;
             break;
         }
@@ -169,7 +186,13 @@ bool RunCase(HFSession session, int input_size, const ImageCase& image_case, con
             return false;
         }
         samples_us.push_back(std::chrono::duration<double, std::micro>(end - begin).count());
-        const uint64_t iteration_hash = HashFaces(faces);
+        uint64_t iteration_hash = 0;
+        if (!HashFaces(faces, iteration_hash)) {
+            std::cerr << "ERROR,image=" << image_case.name << ",reason=benchmark_hash_failed\n";
+            HFReleaseImageStream(stream);
+            HFReleaseImageBitmap(bitmap);
+            return false;
+        }
         HashBytes(benchmark_hash, &iteration_hash, sizeof(iteration_hash));
     }
 

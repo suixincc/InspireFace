@@ -167,15 +167,14 @@ public:
 
     void DynamicSmoothParamUpdate(std::vector<inspirecv::Point2f> &landmarks, std::vector<std::vector<inspirecv::Point2f>> &landmarks_lastNframes,
                                   int lm_length, float h = 0.06f, int n = 5) {
-        std::vector<inspirecv::Point2f> landmarks_temp;
-        landmarks_temp.assign(landmarks.begin(), landmarks.end());
         if (landmarks_lastNframes.size() == n) {
             for (int i = 0; i < lm_length / 2; i++) {
+                const float current_x = landmarks[i].GetX();
+                const float current_y = landmarks[i].GetY();
                 float sum_d = 1;
                 float max_d = 0;
                 for (int j = 0; j < n; j++) {
-                    float d = L2norm(landmarks_temp[i].GetX(), landmarks_temp[i].GetY(), landmarks_lastNframes[j][i].GetX(),
-                                     landmarks_lastNframes[j][i].GetY());
+                    float d = L2norm(current_x, current_y, landmarks_lastNframes[j][i].GetX(), landmarks_lastNframes[j][i].GetY());
                     if (d > max_d)
                         max_d = d;
                 }
@@ -190,10 +189,11 @@ public:
             }
         }
         std::vector<inspirecv::Point2f> landmarks_frame;
+        landmarks_frame.reserve(lm_length / 2);
         for (int i = 0; i < lm_length / 2; i++) {
-            landmarks_frame.push_back(inspirecv::Point2f(landmarks[i].GetX(), landmarks[i].GetY()));
+            landmarks_frame.emplace_back(landmarks[i].GetX(), landmarks[i].GetY());
         }
-        landmarks_lastNframes.push_back(landmarks_frame);
+        landmarks_lastNframes.push_back(std::move(landmarks_frame));
         if (landmarks_lastNframes.size() > n)
             landmarks_lastNframes.erase(landmarks_lastNframes.begin());
     }
