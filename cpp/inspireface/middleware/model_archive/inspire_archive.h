@@ -44,7 +44,8 @@ public:
       m_tag_(other.m_tag_),
       m_version_(other.m_version_),
       m_major_(other.m_major_),
-      m_release_time_(other.m_release_time_) {}
+      m_release_time_(other.m_release_time_),
+      m_similarity_converter_config_(other.m_similarity_converter_config_) {}
 
     InspireArchive& operator=(const InspireArchive& other) {
         if (this != &other) {
@@ -55,6 +56,7 @@ public:
             m_version_ = other.m_version_;
             m_major_ = other.m_major_;
             m_release_time_ = other.m_release_time_;
+            m_similarity_converter_config_ = other.m_similarity_converter_config_;
         }
         return *this;
     }
@@ -123,6 +125,11 @@ public:
     const std::shared_ptr<LandmarkParam>& GetLandmarkParam() const {
         return m_landmark_param_;
     }
+
+    const SimilarityConverterConfig& GetSimilarityConverterConfig() const {
+        return m_similarity_converter_config_;
+    }
+
 private:
     int32_t loadManifestFile() {
         if (m_archive_->QueryLoadStatus() == SARC_SUCCESS) {
@@ -156,18 +163,21 @@ private:
                 config.steepness = m_config_["similarity_converter"]["steepness"].as<double>();
                 config.outputMin = m_config_["similarity_converter"]["output_min"].as<double>();
                 config.outputMax = m_config_["similarity_converter"]["output_max"].as<double>();
-                SIMILARITY_CONVERTER_UPDATE_CONFIG(config);
+                if (!SimilarityConverter::IsConfigValid(config)) {
+                    INSPIRE_LOGE("Invalid similarity converter config in the resource manifest");
+                    return FORMAT_ERROR;
+                }
+                m_similarity_converter_config_ = config;
                 INSPIRE_LOGI(
                   "Successfully loaded similarity converter config: \n \t threshold: %f \n \t middle_score: %f \n \t steepness: %f \n \t output_min: "
                   "%f \n \t output_max: %f",
                   config.threshold, config.middleScore, config.steepness, config.outputMin, config.outputMax);
-                SIMILARITY_CONVERTER_SET_RECOMMENDED_COSINE_THRESHOLD(config.threshold);
             } else {
                 INSPIRE_LOGW("No similarity converter config found, use default config: ");
-                auto config = SIMILARITY_CONVERTER_GET_CONFIG();
+                m_similarity_converter_config_ = SimilarityConverterConfig();
+                const auto& config = m_similarity_converter_config_;
                 INSPIRE_LOGI("threshold: %f \n \t middle_score: %f \n \t steepness: %f \n \t output_min: %f \n \t output_max: %f", config.threshold,
                              config.middleScore, config.steepness, config.outputMin, config.outputMax);
-                SIMILARITY_CONVERTER_SET_RECOMMENDED_COSINE_THRESHOLD(config.threshold);
             }
             // Load face detect model
             if (m_config_["face_detect_pixel_list"] && m_config_["face_detect_model_list"]) {
@@ -209,6 +219,7 @@ private:
     std::vector<std::string> m_face_detect_model_list_;
 
     std::shared_ptr<LandmarkParam> m_landmark_param_;
+    SimilarityConverterConfig m_similarity_converter_config_;
 };
 
 }  // namespace inspire

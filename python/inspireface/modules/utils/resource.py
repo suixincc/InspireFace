@@ -19,6 +19,8 @@ from pathlib import Path
 import urllib.request
 import ssl
 import hashlib
+import hmac
+import tempfile
 
 try:
     from modelscope.hub.snapshot_download import snapshot_download
@@ -45,7 +47,25 @@ def get_file_hash_sha256(file_path):
             sha256.update(chunk)
     return sha256.hexdigest()
 
+
+def _remove_file_if_exists(file_path):
+    try:
+        Path(file_path).unlink()
+    except FileNotFoundError:
+        pass
+
+
+def _verify_file_sha256(file_path, expected_sha256):
+    actual_sha256 = get_file_hash_sha256(file_path)
+    if not hmac.compare_digest(actual_sha256.lower(), expected_sha256.lower()):
+        raise RuntimeError(
+            f"SHA-256 mismatch: expected {expected_sha256}, got {actual_sha256}"
+        )
+
+
 class ResourceManager:
+    DOWNLOAD_TIMEOUT_SECONDS = 60
+
     def __init__(self, use_modelscope: bool = True, modelscope_model_id: str = "tunmxy/InspireFace"):
         """Initialize resource manager and create necessary directories
         
@@ -81,27 +101,27 @@ class ResourceManager:
             "Pikachu": {
                 "url": "https://inspireface-1259028827.cos.ap-singapore.myqcloud.com/inspireface_modelzoo/t4/Pikachu",
                 "filename": "Pikachu",
-                "md5": "5037ba1f49905b783a1c973d5d58b834a645922cc2814c8e3ca630a38dc24431"
+                "sha256": "5037ba1f49905b783a1c973d5d58b834a645922cc2814c8e3ca630a38dc24431"
             },
             "Megatron": {
                 "url": "https://inspireface-1259028827.cos.ap-singapore.myqcloud.com/inspireface_modelzoo/t4/Megatron",
                 "filename": "Megatron",
-                "md5": "709fddf024d9f34ec034d8ef79a4779e1543b867b05e428c1d4b766f69287050"
+                "sha256": "709fddf024d9f34ec034d8ef79a4779e1543b867b05e428c1d4b766f69287050"
             },
             "Megatron_TRT": {
                 "url": "https://inspireface-1259028827.cos.ap-singapore.myqcloud.com/inspireface_modelzoo/t4/Megatron_TRT",
                 "filename": "Megatron_TRT",
-                "md5": "bc9123bdc510954b28d703b8ffe6023f469fb81123fd0b0b27fd452dfa369bab"
+                "sha256": "bc9123bdc510954b28d703b8ffe6023f469fb81123fd0b0b27fd452dfa369bab"
             },
             "Gundam_RK356X": {
                 "url": "https://inspireface-1259028827.cos.ap-singapore.myqcloud.com/inspireface_modelzoo/t4/Gundam_RK356X",
                 "filename": "Gundam_RK356X",
-                "md5": "0fa12a425337ed98bd82610768a50de71cf93ef42a0929ba06cc94c86f4bd415"
+                "sha256": "0fa12a425337ed98bd82610768a50de71cf93ef42a0929ba06cc94c86f4bd415"
             },
             "Gundam_RK3588": {
                 "url": "https://inspireface-1259028827.cos.ap-singapore.myqcloud.com/inspireface_modelzoo/t4/Gundam_RK3588",
                 "filename": "Gundam_RK3588",
-                "md5": "66070e8d654408b666a2210bd498a976bbad8b33aef138c623e652f8d956641e"
+                "sha256": "66070e8d654408b666a2210bd498a976bbad8b33aef138c623e652f8d956641e"
             }
         }
 
@@ -173,30 +193,39 @@ class ResourceManager:
                 return str(model_file)
                 
             current_hash = get_file_hash_sha256(model_file)
-            if current_hash == model_info["md5"]:
+            if hmac.compare_digest(current_hash.lower(), model_info["sha256"].lower()):
                 return str(model_file)
             else:
                 print(f"Model file hash mismatch for '{name}'. Re-downloading...")
 
         # Start download
+        temporary_file = None
         try:
             print(f"Downloading model '{name}'...")
             downloading_flag.touch()
 
-            # Create SSL context and headers
+            # Keep certificate and hostname verification enabled. The default
+            # context rejects untrusted certificates and hostname mismatches.
             ssl_context = ssl.create_default_context()
-            ssl_context.check_hostname = False
-            ssl_context.verify_mode = ssl.CERT_NONE
             headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
             
             req = urllib.request.Request(model_info["url"], headers=headers)
             
-            with urllib.request.urlopen(req, context=ssl_context) as response:
+            with urllib.request.urlopen(req, context=ssl_context, timeout=self.DOWNLOAD_TIMEOUT_SECONDS) as response:
                 total_size = int(response.headers.get('content-length', 0))
                 block_size = 8192
                 downloaded_size = 0
-                
-                with open(model_file, 'wb') as f:
+
+                # Download beside the destination so os.replace() remains
+                # atomic on all supported platforms.
+                with tempfile.NamedTemporaryFile(
+                    mode='wb',
+                    dir=str(self.models_dir),
+                    prefix=f'.{model_info["filename"]}.',
+                    suffix='.part',
+                    delete=False,
+                ) as f:
+                    temporary_file = Path(f.name)
                     while True:
                         buffer = response.read(block_size)
                         if not buffer:
@@ -210,15 +239,22 @@ class ResourceManager:
                             sys.stdout.flush()
             
             print("\nDownload completed")
-            downloading_flag.unlink()  # Remove the downloading flag
+
+            if ignore_verification:
+                print(f"Warning: Model verification skipped for '{name}' as requested.")
+            else:
+                _verify_file_sha256(temporary_file, model_info["sha256"])
+
+            os.replace(str(temporary_file), str(model_file))
+            temporary_file = None
             return str(model_file)
 
         except Exception as e:
-            if model_file.exists():
-                model_file.unlink()
-            if downloading_flag.exists():
-                downloading_flag.unlink()
-            raise RuntimeError(f"Failed to download model: {e}")
+            if temporary_file is not None:
+                _remove_file_if_exists(temporary_file)
+            raise RuntimeError(f"Failed to download model '{name}': {e}") from e
+        finally:
+            _remove_file_if_exists(downloading_flag)
 
     def _download_from_modelscope_with_cache(self, name: str, re_download: bool = False) -> str:
         """Download model from ModelScope with local caching logic

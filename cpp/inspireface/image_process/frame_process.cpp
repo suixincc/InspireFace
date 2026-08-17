@@ -26,18 +26,36 @@ constexpr auto kBGRA = task::BGRA;
 constexpr auto kI420 = task::YUV_I420;
 constexpr auto kGray = task::GRAY;
 
-bool Convert(const Config& config, const Matrix& matrix, const uint8_t* source,
-             int sourceWidth, int sourceHeight, uint8_t* dest,
-             int destWidth, int destHeight) {
-    task::StreamTask* process = task::StreamTask::Create(config);
-    if (process == nullptr) return false;
-    process->SetMatrix(matrix);
-    const auto status = process->Convert(source, sourceWidth, sourceHeight, 0,
-                                         dest, destWidth, destHeight, 3, 0,
-                                         halide_type_of<uint8_t>());
-    task::StreamTask::Destroy(process);
-    return status == SUCCESS;
-}
+class Converter {
+public:
+    Converter() = default;
+    ~Converter() { Reset(); }
+    Converter(const Converter&) = delete;
+    Converter& operator=(const Converter&) = delete;
+
+    void Reset() {
+        if (process_ != nullptr) {
+            task::StreamTask::Destroy(process_);
+            process_ = nullptr;
+        }
+    }
+
+    bool Convert(const Config& config, const Matrix& matrix, const uint8_t* source,
+                 int sourceWidth, int sourceHeight, uint8_t* dest,
+                 int destWidth, int destHeight) {
+        if (process_ == nullptr) {
+            process_ = task::StreamTask::Create(config);
+        }
+        if (process_ == nullptr) return false;
+        process_->SetMatrix(matrix);
+        return process_->Convert(source, sourceWidth, sourceHeight, 0, dest,
+                                 destWidth, destHeight, 3, 0,
+                                 halide_type_of<uint8_t>()) == SUCCESS;
+    }
+
+private:
+    task::StreamTask* process_ = nullptr;
+};
 #else
 using Matrix = MNN::CV::Matrix;
 using Point = MNN::CV::Point;
@@ -53,17 +71,26 @@ constexpr auto kBGRA = MNN::CV::BGRA;
 constexpr auto kI420 = MNN::CV::YUV_I420;
 constexpr auto kGray = MNN::CV::GRAY;
 
-bool Convert(const Config& config, const Matrix& matrix, const uint8_t* source,
-             int sourceWidth, int sourceHeight, uint8_t* dest,
-             int destWidth, int destHeight) {
-    std::shared_ptr<MNN::CV::ImageProcess> process(MNN::CV::ImageProcess::create(config));
-    if (process == nullptr) return false;
-    process->setMatrix(matrix);
-    std::shared_ptr<MNN::Tensor> tensor(MNN::Tensor::create<uint8_t>(
-        std::vector<int>{1, destHeight, destWidth, 3}, dest));
-    return process->convert(source, sourceWidth, sourceHeight, 0, tensor.get()) ==
-           MNN::ErrorCode::NO_ERROR;
-}
+class Converter {
+public:
+    void Reset() { process_.reset(); }
+
+    bool Convert(const Config& config, const Matrix& matrix, const uint8_t* source,
+                 int sourceWidth, int sourceHeight, uint8_t* dest,
+                 int destWidth, int destHeight) {
+        if (process_ == nullptr) {
+            process_.reset(MNN::CV::ImageProcess::create(config));
+        }
+        if (process_ == nullptr) return false;
+        process_->setMatrix(matrix);
+        return process_->convert(source, sourceWidth, sourceHeight, 0, dest,
+                                 destWidth, destHeight, 3, 0,
+                                 halide_type_of<uint8_t>()) == MNN::ErrorCode::NO_ERROR;
+    }
+
+private:
+    std::shared_ptr<MNN::CV::ImageProcess> process_;
+};
 #endif
 
 }  // namespace frame_backend
@@ -77,7 +104,33 @@ public:
         config_.wrap = frame_backend::kZero;
     }
 
+    Impl(const Impl& other)
+    : buffer_(other.buffer_),
+      height_(other.height_),
+      width_(other.width_),
+      preview_scale_(other.preview_scale_),
+      preview_size_(other.preview_size_),
+      tr_(other.tr_),
+      rotation_mode_(other.rotation_mode_),
+      config_(other.config_) {}
+
+    Impl& operator=(const Impl& other) {
+        if (this != &other) {
+            converter_.Reset();
+            buffer_ = other.buffer_;
+            height_ = other.height_;
+            width_ = other.width_;
+            preview_scale_ = other.preview_scale_;
+            preview_size_ = other.preview_size_;
+            tr_ = other.tr_;
+            rotation_mode_ = other.rotation_mode_;
+            config_ = other.config_;
+        }
+        return *this;
+    }
+
     void SetDataFormat(DATA_FORMAT data_format) {
+        converter_.Reset();
         if (data_format == NV21) {
             config_.sourceFormat = frame_backend::kNV21;
         }
@@ -105,6 +158,7 @@ public:
     }
 
     void SetDestFormat(DATA_FORMAT data_format) {
+        converter_.Reset();
         if (data_format == NV21) {
             config_.destFormat = frame_backend::kNV21;
         }
@@ -189,6 +243,7 @@ public:
     frame_backend::Matrix tr_;              // Output-to-input transformation matrix.
     ROTATION_MODE rotation_mode_;           // Current rotation mode.
     frame_backend::Config config_;          // Image processing configuration.
+    mutable frame_backend::Converter converter_;  // Reused backend preprocessing context.
 };
 
 FrameProcess FrameProcess::Create(const uint8_t *data_buffer, int height, int width, DATA_FORMAT data_format, ROTATION_MODE rotation_mode) {
@@ -295,8 +350,8 @@ inspirecv::Image FrameProcess::ExecuteImageAffineProcessing(inspirecv::Transform
     frame_backend::Matrix tr_inv;
     tr.invert(&tr_inv);
     auto img_out = inspirecv::Image::Create(width_out, height_out, 3);
-    const bool converted = frame_backend::Convert(pImpl->config_, tr_inv, pImpl->buffer_, sw, sh,
-                                                   const_cast<uint8_t*>(img_out.Data()), width_out, height_out);
+    const bool converted = pImpl->converter_.Convert(pImpl->config_, tr_inv, pImpl->buffer_, sw, sh,
+                                                      const_cast<uint8_t*>(img_out.Data()), width_out, height_out);
     INSPIREFACE_CHECK_MSG(converted, "Image preprocessing failed");
     return img_out;
 }
@@ -310,6 +365,7 @@ inspirecv::Image FrameProcess::ExecuteImageScaleProcessing(const float scale, bo
     int sh = pImpl->height_;
     int rot_sw = sw;
     int rot_sh = sh;
+    frame_backend::Matrix transform;
     if (pImpl->rotation_mode_ == ROTATION_270 && with_rotation) {
         float srcPoints[] = {
           0.0f, 0.0f, 0.0f, (float)(pImpl->height_ - 1), (float)(pImpl->width_ - 1), 0.0f, (float)(pImpl->width_ - 1), (float)(pImpl->height_ - 1),
@@ -318,13 +374,13 @@ inspirecv::Image FrameProcess::ExecuteImageScaleProcessing(const float scale, bo
           (float)(pImpl->height_ * scale - 1), 0.0f, 0.0f, 0.0f, (float)(pImpl->height_ * scale - 1), (float)(pImpl->width_ * scale - 1), 0.0f,
           (float)(pImpl->width_ * scale - 1)};
 
-        pImpl->tr_.setPolyToPoly(reinterpret_cast<frame_backend::Point*>(dstPoints),
-                                reinterpret_cast<frame_backend::Point*>(srcPoints), 4);
+        transform.setPolyToPoly(reinterpret_cast<frame_backend::Point*>(dstPoints),
+                               reinterpret_cast<frame_backend::Point*>(srcPoints), 4);
         int scaled_height = static_cast<int>(pImpl->width_ * scale);
         int scaled_width = static_cast<int>(pImpl->height_ * scale);
         inspirecv::Image img_out(scaled_width, scaled_height, 3);
-        const bool converted = frame_backend::Convert(pImpl->config_, pImpl->tr_, pImpl->buffer_, sw, sh,
-                                                       const_cast<uint8_t*>(img_out.Data()), scaled_width, scaled_height);
+        const bool converted = pImpl->converter_.Convert(pImpl->config_, transform, pImpl->buffer_, sw, sh,
+                                                          const_cast<uint8_t*>(img_out.Data()), scaled_width, scaled_height);
         INSPIREFACE_CHECK_MSG(converted, "Image preprocessing failed");
         return img_out;
     } else if (pImpl->rotation_mode_ == ROTATION_90 && with_rotation) {
@@ -341,13 +397,13 @@ inspirecv::Image FrameProcess::ExecuteImageScaleProcessing(const float scale, bo
           (float)(pImpl->height_ * scale - 1),
           0.0f,
         };
-        pImpl->tr_.setPolyToPoly(reinterpret_cast<frame_backend::Point*>(dstPoints),
-                                reinterpret_cast<frame_backend::Point*>(srcPoints), 4);
+        transform.setPolyToPoly(reinterpret_cast<frame_backend::Point*>(dstPoints),
+                               reinterpret_cast<frame_backend::Point*>(srcPoints), 4);
         int scaled_height = static_cast<int>(pImpl->width_ * scale);
         int scaled_width = static_cast<int>(pImpl->height_ * scale);
         inspirecv::Image img_out(scaled_width, scaled_height, 3);
-        const bool converted = frame_backend::Convert(pImpl->config_, pImpl->tr_, pImpl->buffer_, sw, sh,
-                                                       const_cast<uint8_t*>(img_out.Data()), scaled_width, scaled_height);
+        const bool converted = pImpl->converter_.Convert(pImpl->config_, transform, pImpl->buffer_, sw, sh,
+                                                          const_cast<uint8_t*>(img_out.Data()), scaled_width, scaled_height);
         INSPIREFACE_CHECK_MSG(converted, "Image preprocessing failed");
         return img_out;
     } else if (pImpl->rotation_mode_ == ROTATION_180 && with_rotation) {
@@ -364,13 +420,13 @@ inspirecv::Image FrameProcess::ExecuteImageScaleProcessing(const float scale, bo
           0.0f,
           0.0f,
         };
-        pImpl->tr_.setPolyToPoly(reinterpret_cast<frame_backend::Point*>(dstPoints),
-                                reinterpret_cast<frame_backend::Point*>(srcPoints), 4);
+        transform.setPolyToPoly(reinterpret_cast<frame_backend::Point*>(dstPoints),
+                               reinterpret_cast<frame_backend::Point*>(srcPoints), 4);
         int scaled_height = static_cast<int>(pImpl->height_ * scale);
         int scaled_width = static_cast<int>(pImpl->width_ * scale);
         inspirecv::Image img_out(scaled_width, scaled_height, 3);
-        const bool converted = frame_backend::Convert(pImpl->config_, pImpl->tr_, pImpl->buffer_, sw, sh,
-                                                       const_cast<uint8_t*>(img_out.Data()), scaled_width, scaled_height);
+        const bool converted = pImpl->converter_.Convert(pImpl->config_, transform, pImpl->buffer_, sw, sh,
+                                                          const_cast<uint8_t*>(img_out.Data()), scaled_width, scaled_height);
         INSPIREFACE_CHECK_MSG(converted, "Image preprocessing failed");
         return img_out;
     } else {
@@ -387,14 +443,14 @@ inspirecv::Image FrameProcess::ExecuteImageScaleProcessing(const float scale, bo
           (float)(pImpl->width_ * scale - 1),
           (float)(pImpl->height_ * scale - 1),
         };
-        pImpl->tr_.setPolyToPoly(reinterpret_cast<frame_backend::Point*>(dstPoints),
-                                reinterpret_cast<frame_backend::Point*>(srcPoints), 4);
+        transform.setPolyToPoly(reinterpret_cast<frame_backend::Point*>(dstPoints),
+                               reinterpret_cast<frame_backend::Point*>(srcPoints), 4);
         int scaled_height = static_cast<int>(pImpl->height_ * scale);
         int scaled_width = static_cast<int>(pImpl->width_ * scale);
 
         inspirecv::Image img_out(scaled_width, scaled_height, 3);
-        const bool converted = frame_backend::Convert(pImpl->config_, pImpl->tr_, pImpl->buffer_, sw, sh,
-                                                       const_cast<uint8_t*>(img_out.Data()), scaled_width, scaled_height);
+        const bool converted = pImpl->converter_.Convert(pImpl->config_, transform, pImpl->buffer_, sw, sh,
+                                                          const_cast<uint8_t*>(img_out.Data()), scaled_width, scaled_height);
         INSPIREFACE_CHECK_MSG(converted, "Image preprocessing failed");
         return img_out;
     }

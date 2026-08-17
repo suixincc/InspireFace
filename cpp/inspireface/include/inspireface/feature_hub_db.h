@@ -87,6 +87,13 @@ public:
     int32_t GetAllIds();
 
     /**
+     * @brief Copies all IDs into caller-owned storage.
+     * @param ids Destination for the database IDs.
+     * @return int32_t Status code of the operation.
+     */
+    int32_t GetAllIds(std::vector<int64_t>& ids);
+
+    /**
      * @brief Searches for a face feature within stored data.
      * @param queryFeature Embedded feature to search for.
      * @param searchResult SearchResult object to store search results.

@@ -45,6 +45,8 @@
 #define HERR_FT_HUB_DISABLE (HERR_FT_HUB_BASE + 1)            // FeatureHub is disabled (201)
 #define HERR_FT_HUB_INSERT_FAILURE (HERR_FT_HUB_BASE + 2)     // Data insertion error (202)
 #define HERR_FT_HUB_NOT_FOUND_FEATURE (HERR_FT_HUB_BASE + 3)  // Get face feature error (203)
+#define HERR_FT_HUB_INVALID_FEATURE (HERR_FT_HUB_BASE + 4)    // Invalid feature data (204)
+#define HERR_FT_HUB_DATABASE_FAILURE (HERR_FT_HUB_BASE + 5)   // Database operation error (205)
 
 // Archive error types (250-299)
 #define HERR_ARCHIVE_BASE 0x00FA                                 // Archive error types (250)
@@ -60,6 +62,7 @@
 #define HERR_DEVICE_CUDA_TENSORRT_NOT_SUPPORT (HERR_DEVICE_BASE + 2)  // CUDA TensorRT not supported (302)
 #define HERR_DEVICE_CUDA_UNKNOWN_ERROR (HERR_DEVICE_BASE + 3)         // CUDA unknown error (303)
 #define HERR_DEVICE_CUDA_DISABLE (HERR_DEVICE_BASE + 4)               // CUDA support is disabled (304)
+#define HERR_DEVICE_IMAGE_PROCESS_FAILURE (HERR_DEVICE_BASE + 5)      // Image preprocessing failed (305)
 
 // Extension module error types (350-549)
 #define HERR_EXTENSION_BASE 0x015E                                             // Extension module error types (350)

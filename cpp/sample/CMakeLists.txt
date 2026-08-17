@@ -71,6 +71,101 @@ set_target_properties(FaceLandmarkSmoothingBenchmarkSample PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/sample/benchmark/"
 )
 
+add_executable(FaceActionLogicGuardSample benchmark/face_action_logic_guard.cpp)
+target_link_libraries(FaceActionLogicGuardSample InspireFace ${ext})
+set_target_properties(FaceActionLogicGuardSample PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/sample/benchmark/"
+)
+
+if(NOT ISF_BUILD_SHARED_LIBS)
+        add_executable(ImagePreprocessGuardSample benchmark/image_preprocess_guard.cpp)
+        target_link_libraries(ImagePreprocessGuardSample InspireFace ${ext})
+        set_target_properties(ImagePreprocessGuardSample PROPERTIES
+                RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/sample/benchmark/"
+        )
+endif()
+
+add_executable(InternalRuntimeGuardSample
+        benchmark/internal_runtime_guard.cpp
+        ../inspireface/track_module/tracker_optional/bytetrack/BYTETracker.cpp
+        ../inspireface/track_module/tracker_optional/bytetrack/STrack.cpp
+        ../inspireface/track_module/tracker_optional/bytetrack/kalmanFilter.cpp
+        ../inspireface/track_module/tracker_optional/bytetrack/lapjv.cpp
+        ../inspireface/track_module/tracker_optional/bytetrack/tracker_utils.cpp)
+target_link_libraries(InternalRuntimeGuardSample InspireFace ${ext})
+set_target_properties(InternalRuntimeGuardSample PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/sample/benchmark/"
+)
+
+add_executable(SessionInitializationGuardSample
+        benchmark/session_initialization_guard.cpp
+        ../inspireface/middleware/model_archive/core_archive/microtar/microtar.c)
+target_link_libraries(SessionInitializationGuardSample InspireFace ${ext})
+set_target_properties(SessionInitializationGuardSample PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/sample/benchmark/"
+)
+
+# This guard intentionally inspects internal MNN tensors and cache counters.
+# Keep it on the static-library sample build instead of exporting test-only
+# implementation symbols from the shared SDK.
+if(NOT ISF_BUILD_SHARED_LIBS)
+        add_executable(MnnInferenceCacheGuardSample benchmark/mnn_inference_cache_guard.cpp)
+        target_link_libraries(MnnInferenceCacheGuardSample InspireFace ${ext})
+        set_target_properties(MnnInferenceCacheGuardSample PROPERTIES
+                RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/sample/benchmark/"
+        )
+
+        # FeatureHub's transaction guard also exercises the internal SQLite
+        # wrapper, which is intentionally not part of the shared SDK ABI.
+        add_executable(FeatureHubSafetyGuardSample benchmark/feature_hub_safety_guard.cpp)
+        target_link_libraries(FeatureHubSafetyGuardSample InspireFace ${ext})
+        set_target_properties(FeatureHubSafetyGuardSample PROPERTIES
+                RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/sample/benchmark/"
+        )
+
+        add_executable(ResourceManagerGuardSample benchmark/resource_manager_guard.cpp)
+        target_link_libraries(ResourceManagerGuardSample InspireFace ${ext})
+        set_target_properties(ResourceManagerGuardSample PROPERTIES
+                RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/sample/benchmark/"
+        )
+
+        add_executable(SimilarityConverterGuardSample
+                benchmark/similarity_converter_guard.cpp
+                ../inspireface/middleware/model_archive/core_archive/microtar/microtar.c)
+        target_link_libraries(SimilarityConverterGuardSample InspireFace ${ext})
+        set_target_properties(SimilarityConverterGuardSample PROPERTIES
+                RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/sample/benchmark/"
+        )
+endif()
+
+add_executable(OutputTensorInfoGuardSample benchmark/output_tensor_info_guard.cpp)
+target_link_libraries(OutputTensorInfoGuardSample InspireFace ${ext})
+set_target_properties(OutputTensorInfoGuardSample PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/sample/benchmark/"
+)
+
+add_executable(LaunchLifecycleGuardSample benchmark/launch_lifecycle_guard.cpp)
+target_link_libraries(LaunchLifecycleGuardSample InspireFace ${ext})
+set_target_properties(LaunchLifecycleGuardSample PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/sample/benchmark/"
+)
+
+# This guard exercises AnyNetAdapter and archive internals that are intentionally
+# not exported by the shared SDK. Keep it on the static-library sample build.
+if(NOT ISF_BUILD_SHARED_LIBS)
+        add_executable(AnyNetInitializationGuardSample benchmark/any_net_initialization_guard.cpp)
+        target_link_libraries(AnyNetInitializationGuardSample InspireFace ${ext})
+        set_target_properties(AnyNetInitializationGuardSample PROPERTIES
+                RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/sample/benchmark/"
+        )
+
+        add_executable(SoftmaxGuardSample benchmark/softmax_guard.cpp)
+        target_link_libraries(SoftmaxGuardSample InspireFace ${ext})
+        set_target_properties(SoftmaxGuardSample PROPERTIES
+                RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/sample/benchmark/"
+        )
+endif()
+
 # Examples of face recognition
 add_executable(FaceComparisonSample api/sample_face_comparison.c)
 target_link_libraries(FaceComparisonSample InspireFace ${ext})

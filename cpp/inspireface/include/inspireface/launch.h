@@ -17,6 +17,7 @@ namespace inspire {
 
 // Forward declarations
 class InspireArchive;
+class FaceSession;
 
 // The Launch class acts as the main entry point for the InspireFace system.
 // It is responsible for loading static resources such as models, configurations, and parameters.
@@ -124,6 +125,13 @@ public:
     int32_t GetImageProcessAlignedWidth() const;
 
 private:
+    friend class FaceSession;
+
+    // Returns a lifetime-pinned snapshot for internal session construction.
+    // Reload and Unload only replace the global snapshot; existing sessions keep
+    // the archive they were configured with alive.
+    std::shared_ptr<InspireArchive> AcquireArchive() const;
+
     // Private constructor for the singleton pattern
     Launch();
 

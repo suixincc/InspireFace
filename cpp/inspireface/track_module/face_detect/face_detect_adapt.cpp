@@ -5,6 +5,7 @@
 
 #include "face_detect_adapt.h"
 #include "cost_time.h"
+#include "herror.h"
 #include "spend_timer.h"
 
 namespace inspire {
@@ -13,51 +14,59 @@ FaceDetectAdapt::FaceDetectAdapt(int input_size, float nms_threshold, float cls_
 : AnyNetAdapter("FaceDetectAdapt"), m_nms_threshold_(nms_threshold), m_cls_threshold_(cls_threshold), m_input_size_(input_size) {}
 
 FaceLocList FaceDetectAdapt::operator()(const inspirecv::Image &bgr) {
+    FaceLocList results;
+    Detect(bgr, results);
+    return results;
+}
+
+int32_t FaceDetectAdapt::Detect(const inspirecv::Image &bgr, FaceLocList &results) {
+    results.clear();
     inspire::SpendTimer time_image_process("Image process");
     time_image_process.Start();
-    int ori_w = bgr.Width();
-    int ori_h = bgr.Height();
-    float scale;
-
+    float scale = 0.0f;
     inspirecv::Image pad;
-
-    uint8_t *resized_data = nullptr;
-    if (ori_w == m_input_size_ && ori_h == m_input_size_) {
-        scale = 1.0f;
-        resized_data = (uint8_t *)bgr.Data();
-    } else {
-        m_processor_->ResizeAndPadding(bgr.Data(), bgr.Width(), bgr.Height(), bgr.Channels(), m_input_size_, m_input_size_, &resized_data, scale);
+    if (ResizeAndPadImageForInference(bgr, m_input_size_, m_input_size_, pad, scale) != InferenceWrapper::WrapperOk) {
+        m_processor_->MarkDone();
+        return HERR_DEVICE_IMAGE_PROCESS_FAILURE;
     }
-
-    pad = inspirecv::Image::Create(m_input_size_, m_input_size_, bgr.Channels(), resized_data, false);
 
     time_image_process.Stop();
     // std::cout << time_image_process << std::endl;
     // pad.Write("pad.jpg");
     //    LOGD("Prepare");
-    AnyTensorOutputs outputs;
+    AnyTensorViews outputs;
     inspire::SpendTimer time_forward("Forward");
     time_forward.Start();
-    Forward(pad, outputs);
+    const int32_t forward_status = ForwardViews(pad, outputs);
     time_forward.Stop();
+    if (forward_status != InferenceWrapper::WrapperOk || outputs.size() < 9) {
+        INSPIRE_LOGE("Face detector inference returned invalid outputs");
+        m_processor_->MarkDone();
+        return HERR_SESS_TRACKER_FAILURE;
+    }
     // std::cout << time_forward << std::endl;
     //    LOGD("Forward");
 
     inspire::SpendTimer time_decode("Decode");
     time_decode.Start();
-    std::vector<FaceLoc> results;
     std::vector<int> strides = {8, 16, 32};
     for (int i = 0; i < strides.size(); ++i) {
-        const std::vector<float> &tensor_cls = outputs[i].second;
-        const std::vector<float> &tensor_box = outputs[i + 3].second;
-        const std::vector<float> &tensor_lmk = outputs[i + 6].second;
-        _decode(tensor_cls, tensor_box, tensor_lmk, strides[i], results);
+        const int anchors = (m_input_size_ / strides[i]) * (m_input_size_ / strides[i]) * 2;
+        if (outputs[i].size < static_cast<size_t>(anchors) || outputs[i + 3].size < static_cast<size_t>(anchors * 4) ||
+            outputs[i + 6].size < static_cast<size_t>(anchors * 10)) {
+            INSPIRE_LOGE("Face detector output tensor shape mismatch at stride %d", strides[i]);
+            m_processor_->MarkDone();
+            results.clear();
+            return HERR_SESS_TRACKER_FAILURE;
+        }
+        _decode(outputs[i].data, outputs[i + 3].data, outputs[i + 6].data, strides[i], results);
     }
     time_decode.Stop();
     // std::cout << time_decode << std::endl;
 
     _nms(results, m_nms_threshold_);
-    std::sort(results.begin(), results.end(), [](FaceLoc a, FaceLoc b) { return (a.y2 - a.y1) * (a.x2 - a.x1) > (b.y2 - b.y1) * (b.x2 - b.x1); });
+    std::sort(results.begin(), results.end(),
+              [](const FaceLoc &a, const FaceLoc &b) { return (a.y2 - a.y1) * (a.x2 - a.x1) > (b.y2 - b.y1) * (b.x2 - b.x1); });
     for (auto &face : results) {
         face.x1 = face.x1 / scale;
         face.y1 = face.y1 / scale;
@@ -68,9 +77,11 @@ FaceLocList FaceDetectAdapt::operator()(const inspirecv::Image &bgr) {
             face.lmk[i * 2 + 1] = face.lmk[i * 2 + 1] / scale;
         }
     }
-    m_processor_->MarkDone();
-
-    return results;
+    if (m_processor_->MarkDone() != 0) {
+        results.clear();
+        return HERR_DEVICE_IMAGE_PROCESS_FAILURE;
+    }
+    return HSUCCEED;
 }
 
 void FaceDetectAdapt::_nms(std::vector<FaceLoc> &input_faces, float nms_threshold) {
@@ -106,8 +117,7 @@ void FaceDetectAdapt::_nms(std::vector<FaceLoc> &input_faces, float nms_threshol
     input_faces.swap(retained_faces);
 }
 
-void FaceDetectAdapt::_decode(const std::vector<float> &cls_pred, const std::vector<float> &box_pred, const std::vector<float> &lmk_pred, int stride,
-                              std::vector<FaceLoc> &results) {
+void FaceDetectAdapt::_decode(const float *cls_pred, const float *box_pred, const float *lmk_pred, int stride, std::vector<FaceLoc> &results) {
     constexpr int kNumAnchors = 2;
     const int feature_height = m_input_size_ / stride;
     const int feature_width = m_input_size_ / stride;

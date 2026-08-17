@@ -12,6 +12,7 @@
 #include "data_type.h"
 #include "track_module/landmark/all.h"
 #include <log.h>
+#include <cstring>
 
 // Define the namespace "inspire" for encapsulation
 namespace inspire {
@@ -50,6 +51,7 @@ inline void INSPIRE_API PrintHyperFaceDataDetail(const FaceTrackWrap& data) {
  */
 inline FaceTrackWrap INSPIRE_API FaceObjectInternalToHyperFaceData(const FaceObjectInternal& obj, int group_index = -1) {
     FaceTrackWrap data;
+    std::memset(&data, 0, sizeof(data));
     // Face rect
     data.rect.x = obj.bbox_.GetX();
     data.rect.y = obj.bbox_.GetY();

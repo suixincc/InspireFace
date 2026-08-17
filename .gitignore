@@ -29,3 +29,4 @@ cpp/inspireface/version.txt
 test_res/data/video_frames/
 *.mp4
 build_*/
+/benchmark_logs/
