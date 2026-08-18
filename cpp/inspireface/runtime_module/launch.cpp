@@ -129,7 +129,10 @@ int32_t Launch::Load(const std::string& path) {
         return HERR_DEVICE_CUDA_NOT_SUPPORT;
     }
 #endif
-    INSPIREFACE_CHECK_MSG(os::IsExists(path), "The package path does not exist because the launch failed.");
+    if (!os::IsExists(path)) {
+        INSPIRE_LOGE("The package path does not exist: %s", path.c_str());
+        return HERR_ARCHIVE_LOAD_FAILURE;
+    }
 #if defined(ISF_ENABLE_APPLE_EXTENSION)
     std::string extension_path = ResolveAppleExtensionPath(path);
 #endif
@@ -171,7 +174,10 @@ int32_t Launch::Load(const std::string& path) {
 
 int32_t Launch::Reload(const std::string& path) {
     std::lock_guard<std::mutex> lock(pImpl->mutex_);
-    INSPIREFACE_CHECK_MSG(os::IsExists(path), "The package path does not exist because the launch failed.");
+    if (!os::IsExists(path)) {
+        INSPIRE_LOGE("The package path does not exist: %s", path.c_str());
+        return HERR_ARCHIVE_LOAD_FAILURE;
+    }
 #if defined(ISF_ENABLE_APPLE_EXTENSION)
     std::string extension_path = ResolveAppleExtensionPath(path);
 #endif

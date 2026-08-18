@@ -12,7 +12,7 @@
 
 using namespace inspire;
 
-TEST_CASE("test_SessionFaceTrack", "[session_face_track]") {
+TEST_CASE("test_SessionFaceTrack", "[session_face_track][model_accuracy]") {
     DRAW_SPLIT_LINE
     TEST_PRINT_OUTPUT(true);
 

@@ -2,19 +2,35 @@
  * Created by Jingyu Yan
  * @date 2024-10-01
  */
+#include <algorithm>
 #include <iostream>
 #include "settings/test_settings.h"
 #include "inspireface/c_api/inspireface.h"
 #include "unit/test_helper/test_help.h"
 #include <thread>
 
+namespace {
+
+class ScopedFeatureHubDisable {
+public:
+    ScopedFeatureHubDisable() {
+        HFFeatureHubDataDisable();
+    }
+    ~ScopedFeatureHubDisable() {
+        HFFeatureHubDataDisable();
+    }
+};
+
+}  // namespace
+
 TEST_CASE("test_FeatureHubBase", "[FeatureHub][BasicFunction]") {
+    ScopedFeatureHubDisable reset;
     DRAW_SPLIT_LINE
     TEST_PRINT_OUTPUT(true);
 
     SECTION("FeatureHub basic function") {
         HResult ret;
-        HFFeatureHubConfiguration configuration;
+        HFFeatureHubConfiguration configuration = {};
         auto dbPath = GET_SAVE_DATA(".test");
         HString dbPathStr = new char[dbPath.size() + 1];
         std::strcpy(dbPathStr, dbPath.c_str());
@@ -38,7 +54,7 @@ TEST_CASE("test_FeatureHubBase", "[FeatureHub][BasicFunction]") {
 
     SECTION("FeatureHub search top-k") {
         HResult ret;
-        HFFeatureHubConfiguration configuration;
+        HFFeatureHubConfiguration configuration = {};
         auto dbPath = GET_SAVE_DATA(".test");
         HString dbPathStr = new char[dbPath.size() + 1];
         std::strcpy(dbPathStr, dbPath.c_str());
@@ -121,7 +137,7 @@ TEST_CASE("test_FeatureHubBase", "[FeatureHub][BasicFunction]") {
         HResult ret;
         auto dbPath = GET_SAVE_DATA(".test");
         HString dbPathStr = new char[dbPath.size() + 1];
-        HFFeatureHubConfiguration configuration;
+        HFFeatureHubConfiguration configuration = {};
         configuration.primaryKeyMode = HF_PK_AUTO_INCREMENT;
         configuration.enablePersistence = 0;
         configuration.persistenceDbPath = dbPathStr;
@@ -145,7 +161,7 @@ TEST_CASE("test_FeatureHubBase", "[FeatureHub][BasicFunction]") {
 
     SECTION("Only memory storage is used") {
         HResult ret;
-        HFFeatureHubConfiguration configuration;
+        HFFeatureHubConfiguration configuration = {};
         configuration.enablePersistence = 0;
         ret = HFFeatureHubDataEnable(configuration);
         REQUIRE(ret == HSUCCEED);
@@ -157,12 +173,13 @@ TEST_CASE("test_FeatureHubBase", "[FeatureHub][BasicFunction]") {
     }
 }
 
-TEST_CASE("test_ConcurrencyInsertion", "[FeatureHub][Concurrency]") {
+TEST_CASE("test_ConcurrencyInsertion", "[FeatureHub][Concurrency][stress]") {
+    ScopedFeatureHubDisable reset;
     DRAW_SPLIT_LINE
     TEST_PRINT_OUTPUT(true);
 
     HResult ret;
-    HFFeatureHubConfiguration configuration;
+    HFFeatureHubConfiguration configuration = {};
     auto dbPath = GET_SAVE_DATA(".test");
     HString dbPathStr = new char[dbPath.size() + 1];
     std::strcpy(dbPathStr, dbPath.c_str());
@@ -226,12 +243,13 @@ TEST_CASE("test_ConcurrencyInsertion", "[FeatureHub][Concurrency]") {
     delete[] dbPathStr;
 }
 
-TEST_CASE("test_ConcurrencyRemove", "[FeatureHub][Concurrency]") {
+TEST_CASE("test_ConcurrencyRemove", "[FeatureHub][Concurrency][stress]") {
+    ScopedFeatureHubDisable reset;
     DRAW_SPLIT_LINE
     TEST_PRINT_OUTPUT(true);
 
     HResult ret;
-    HFFeatureHubConfiguration configuration;
+    HFFeatureHubConfiguration configuration = {};
     auto dbPath = GET_SAVE_DATA(".test");
     HString dbPathStr = new char[dbPath.size() + 1];
     std::strcpy(dbPathStr, dbPath.c_str());
@@ -306,12 +324,13 @@ TEST_CASE("test_ConcurrencyRemove", "[FeatureHub][Concurrency]") {
     delete[] dbPathStr;
 }
 
-TEST_CASE("test_ConcurrencySearch", "[FeatureHub][Concurrency]") {
+TEST_CASE("test_ConcurrencySearch", "[FeatureHub][Concurrency][stress]") {
+    ScopedFeatureHubDisable reset;
     DRAW_SPLIT_LINE
     TEST_PRINT_OUTPUT(true);
 
     HResult ret;
-    HFFeatureHubConfiguration configuration;
+    HFFeatureHubConfiguration configuration = {};
     auto dbPath = GET_SAVE_DATA(".test");
     HString dbPathStr = new char[dbPath.size() + 1];
     std::strcpy(dbPathStr, dbPath.c_str());
@@ -443,12 +462,13 @@ TEST_CASE("test_ConcurrencySearch", "[FeatureHub][Concurrency]") {
     delete[] dbPathStr;
 }
 
-TEST_CASE("test_FeatureCache", "[FeatureHub][Concurrency]") {
+TEST_CASE("test_FeatureCache", "[FeatureHub][Concurrency][stress]") {
+    ScopedFeatureHubDisable reset;
     DRAW_SPLIT_LINE
     TEST_PRINT_OUTPUT(true);
 
     HResult ret;
-    HFFeatureHubConfiguration configuration;
+    HFFeatureHubConfiguration configuration = {};
     auto dbPath = GET_SAVE_DATA(".test");
     HString dbPathStr = new char[dbPath.size() + 1];
     std::strcpy(dbPathStr, dbPath.c_str());
@@ -501,10 +521,11 @@ TEST_CASE("test_FeatureCache", "[FeatureHub][Concurrency]") {
 }
 
 TEST_CASE("test_FeatureHubManualInput", "[FeatureHub][ManualInput]") {
+    ScopedFeatureHubDisable reset;
     DRAW_SPLIT_LINE
     TEST_PRINT_OUTPUT(true);
     HResult ret;
-    HFFeatureHubConfiguration configuration;
+    HFFeatureHubConfiguration configuration = {};
     configuration.primaryKeyMode = HF_PK_MANUAL_INPUT;
     configuration.enablePersistence = 0;
     TEST_PRINT("Start enable feature hub");
@@ -531,10 +552,11 @@ TEST_CASE("test_FeatureHubManualInput", "[FeatureHub][ManualInput]") {
     ret = HFFeatureHubGetExistingIds(&existingIds);
     REQUIRE(ret == HSUCCEED);
     REQUIRE(existingIds.size == ids.size());
-    for (int i = 0; i < existingIds.size; ++i) {
-        TEST_PRINT("Existing ID: {}", existingIds.ids[i]);
-        REQUIRE(existingIds.ids[i] == ids[i]);
-    }
+    std::vector<HFaceId> actual_ids(existingIds.ids, existingIds.ids + existingIds.size);
+    auto expected_ids = ids;
+    std::sort(actual_ids.begin(), actual_ids.end());
+    std::sort(expected_ids.begin(), expected_ids.end());
+    CHECK(actual_ids == expected_ids);
 
     ret = HFFeatureHubViewDBTable();
     REQUIRE(ret == HSUCCEED);

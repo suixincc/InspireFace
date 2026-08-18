@@ -7,6 +7,7 @@
 #define INSPIREFACE_INTERNAL_H
 
 #include "engine/face_session.h"
+#include "inspireface.h"
 
 /**
  * @brief Struct for managing face algorithm session.
@@ -24,6 +25,7 @@ typedef struct HF_FaceAlgorithmSession {
  */
 typedef struct HF_CameraStream {
     inspirecv::FrameProcess impl;  ///< Implementation of the camera stream.
+    HFImageFormat format{HF_STREAM_YUV_NV21};  ///< Current source layout for dimension validation.
 } HF_CameraStream;                 ///< Handle for managing camera stream.
 
 /**

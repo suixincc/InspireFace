@@ -19,6 +19,74 @@ from .exception import (
 # If True, the latest model will not be verified
 IGNORE_VERIFICATION_OF_THE_LATEST_MODEL = False
 
+_INT32_MAX = (1 << 31) - 1
+_PACKED_STREAM_CHANNELS = {
+    HF_STREAM_RGB: 3,
+    HF_STREAM_BGR: 3,
+    HF_STREAM_RGBA: 4,
+    HF_STREAM_BGRA: 4,
+    HF_STREAM_GRAY: 1,
+}
+_YUV420_STREAM_FORMATS = {
+    HF_STREAM_YUV_NV12,
+    HF_STREAM_YUV_NV21,
+    HF_STREAM_I420,
+}
+_VALID_STREAM_FORMATS = set(_PACKED_STREAM_CHANNELS) | _YUV420_STREAM_FORMATS
+_VALID_ROTATIONS = {
+    HF_CAMERA_ROTATION_0,
+    HF_CAMERA_ROTATION_90,
+    HF_CAMERA_ROTATION_180,
+    HF_CAMERA_ROTATION_270,
+}
+
+
+def _normalize_int32(value, name, positive=False):
+    if isinstance(value, (bool, np.bool_)) or not isinstance(value, (int, np.integer)):
+        raise InvalidInputError(
+            f"{name} must be an integer",
+            errcode.HERR_INVALID_IMAGE_STREAM_PARAM,
+            **{name: value}
+        )
+    normalized = int(value)
+    if normalized < 0 or normalized > _INT32_MAX or (positive and normalized == 0):
+        qualifier = "a positive 32-bit integer" if positive else "a non-negative 32-bit integer"
+        raise InvalidInputError(
+            f"{name} must be {qualifier}",
+            errcode.HERR_INVALID_IMAGE_STREAM_PARAM,
+            **{name: normalized}
+        )
+    return normalized
+
+
+def _normalize_stream_format(stream_format):
+    normalized = _normalize_int32(stream_format, "stream_format")
+    if normalized not in _VALID_STREAM_FORMATS:
+        raise InvalidInputError(
+            "Unsupported image stream format",
+            errcode.HERR_INVALID_IMAGE_STREAM_PARAM,
+            stream_format=normalized
+        )
+    return normalized
+
+
+def _normalize_rotation(rotation):
+    normalized = _normalize_int32(rotation, "rotation")
+    if normalized not in _VALID_ROTATIONS:
+        raise InvalidInputError(
+            "Unsupported image rotation",
+            errcode.HERR_INVALID_IMAGE_STREAM_PARAM,
+            rotation=normalized
+        )
+    return normalized
+
+
+def _required_image_bytes(width, height, stream_format):
+    if stream_format in _YUV420_STREAM_FORMATS:
+        return width * (height * 3 // 2)
+    return width * height * _PACKED_STREAM_CHANNELS[stream_format]
+
+
 def ignore_check_latest_model(ignore: bool):
     global IGNORE_VERIFICATION_OF_THE_LATEST_MODEL
     IGNORE_VERIFICATION_OF_THE_LATEST_MODEL = ignore
@@ -35,16 +103,22 @@ class ImageStream(object):
     """
     ImageStream class handles the conversion of image data from various sources into a format compatible with the InspireFace library.
     It allows loading image data from numpy arrays, buffer objects, and directly from OpenCV images.
+
+    The stream retains its input memory until release. Contiguous mutable inputs are
+    used without copying, so callers must not resize them and should avoid changing
+    their contents while native processing is in progress. Non-contiguous inputs are
+    copied once into contiguous storage owned by the stream.
     """
 
     @staticmethod
-    def load_from_cv_image(image: np.ndarray, stream_format=HF_STREAM_BGR, rotation=HF_CAMERA_ROTATION_0):
+    def load_from_cv_image(image: np.ndarray, stream_format=None, rotation=HF_CAMERA_ROTATION_0):
         """
         Load image data from an OpenCV image (numpy ndarray).
 
         Args:
             image (np.ndarray): The image data as a numpy array.
-            stream_format (int): The format of the image data (e.g., BGR, RGB).
+            stream_format (int, optional): The format of the image data. If omitted,
+                three-channel images use BGR and four-channel images use BGRA.
             rotation (int): The rotation angle to be applied to the image data.
 
         Returns:
@@ -55,6 +129,19 @@ class ImageStream(object):
         """
         validate_image_format(image, "Load from CV image")
         h, w, c = image.shape
+        if stream_format is None:
+            stream_format = HF_STREAM_BGR if c == 3 else HF_STREAM_BGRA
+        else:
+            stream_format = _normalize_stream_format(stream_format)
+            expected_channels = _PACKED_STREAM_CHANNELS.get(stream_format)
+            if expected_channels != c:
+                raise InvalidInputError(
+                    "CV image channels do not match stream format",
+                    errcode.HERR_INVALID_IMAGE_STREAM_PARAM,
+                    channels=c,
+                    stream_format=stream_format,
+                    expected_channels=expected_channels
+                )
         return ImageStream(image, w, h, stream_format, rotation)
 
     @staticmethod
@@ -103,28 +190,147 @@ class ImageStream(object):
             rotation (int): The rotation applied to the image.
 
         Raises:
+            InvalidInputError: If dimensions, format, rotation, or buffer layout are invalid.
             ResourceError: If there is an error in creating the image stream.
         """
-        self.rotate = rotation
-        self.data_format = stream_format
+        self._handle = None
+        self._data_owner = None
+        self.width = _normalize_int32(width, "width", positive=True)
+        self.height = _normalize_int32(height, "height", positive=True)
+        self.rotate = _normalize_rotation(rotation)
+        self.data_format = _normalize_stream_format(stream_format)
+        required_bytes = _required_image_bytes(self.width, self.height, self.data_format)
+
         if isinstance(data, np.ndarray):
-            data_ptr = ctypes.cast(data.ctypes.data, ctypes.POINTER(ctypes.c_uint8))
-        else:
-            data_ptr = ctypes.cast(data, ctypes.POINTER(ctypes.c_uint8))
+            self._validate_ndarray_layout(data)
+        owner, data_ptr, available_bytes = self._prepare_data(data)
+        if available_bytes is not None and available_bytes < required_bytes:
+            raise InvalidInputError(
+                "Image buffer is smaller than required by its dimensions and format",
+                errcode.HERR_INVALID_BUFFER_SIZE,
+                required_bytes=required_bytes,
+                available_bytes=available_bytes,
+                width=self.width,
+                height=self.height,
+                stream_format=self.data_format
+            )
+
+        self._data_owner = owner
         image_struct = HFImageData()
         image_struct.data = data_ptr
-        image_struct.width = width
-        image_struct.height = height
+        image_struct.width = self.width
+        image_struct.height = self.height
         image_struct.format = self.data_format
         image_struct.rotation = self.rotate
-        self._handle = HFImageStream()
-        ret = HFCreateImageStream(PHFImageData(image_struct), self._handle)
-        check_error(ret, "Create ImageStream", width=width, height=height, format=stream_format)
+        handle = HFImageStream()
+        ret = HFCreateImageStream(ctypes.byref(image_struct), ctypes.byref(handle))
+        check_error(ret, "Create ImageStream", width=self.width, height=self.height, format=self.data_format)
+        self._handle = handle
+
+    def _validate_ndarray_layout(self, data):
+        if data.dtype != np.uint8:
+            raise InvalidInputError(
+                "Image ndarray data must be uint8",
+                errcode.HERR_INVALID_IMAGE_STREAM_PARAM,
+                actual_dtype=str(data.dtype)
+            )
+        if data.ndim == 1:
+            return
+
+        if self.data_format in _PACKED_STREAM_CHANNELS:
+            channels = _PACKED_STREAM_CHANNELS[self.data_format]
+            valid_shapes = {(self.height, self.width, channels)}
+            if channels == 1:
+                valid_shapes.add((self.height, self.width))
+            if data.shape not in valid_shapes:
+                raise InvalidInputError(
+                    "Image ndarray shape does not match dimensions and format",
+                    errcode.HERR_INVALID_IMAGE_STREAM_PARAM,
+                    actual_shape=data.shape,
+                    width=self.width,
+                    height=self.height,
+                    stream_format=self.data_format
+                )
+            return
+
+        expected_shape = (self.height * 3 // 2, self.width)
+        if data.shape != expected_shape:
+            raise InvalidInputError(
+                "YUV420 ndarray must be flat or have shape (height * 3 / 2, width)",
+                errcode.HERR_INVALID_IMAGE_STREAM_PARAM,
+                actual_shape=data.shape,
+                expected_shape=expected_shape,
+                stream_format=self.data_format
+            )
+
+    @staticmethod
+    def _prepare_data(data):
+        if isinstance(data, np.ndarray):
+            owner = np.ascontiguousarray(data)
+            pointer = owner.ctypes.data_as(ctypes.POINTER(ctypes.c_uint8))
+            return owner, pointer, owner.nbytes
+
+        if isinstance(data, bytes):
+            pointer = ctypes.cast(data, ctypes.POINTER(ctypes.c_uint8))
+            return data, pointer, len(data)
+
+        pointer_base = getattr(ctypes, "_Pointer", None)
+        is_ctypes_pointer = (
+            isinstance(data, (ctypes.c_void_p, ctypes.c_char_p))
+            or (pointer_base is not None and isinstance(data, pointer_base))
+        )
+        if isinstance(data, ctypes.Array) or is_ctypes_pointer:
+            pointer = ctypes.cast(data, ctypes.POINTER(ctypes.c_uint8))
+            if not pointer:
+                raise InvalidInputError(
+                    "Image data pointer must not be null",
+                    errcode.HERR_INVALID_IMAGE_STREAM_PARAM
+                )
+            available_bytes = ctypes.sizeof(data) if isinstance(data, ctypes.Array) else None
+            return data, pointer, available_bytes
+
+        try:
+            view = memoryview(data)
+        except TypeError:
+            raise InvalidInputError(
+                "Image data must support the buffer protocol or be a ctypes pointer",
+                errcode.HERR_INVALID_IMAGE_STREAM_PARAM,
+                input_type=type(data).__name__
+            )
+
+        if not view.c_contiguous:
+            owner = view.tobytes()
+            pointer = ctypes.cast(owner, ctypes.POINTER(ctypes.c_uint8))
+            return owner, pointer, len(owner)
+
+        try:
+            byte_view = view.cast("B")
+        except TypeError:
+            owner = view.tobytes()
+            pointer = ctypes.cast(owner, ctypes.POINTER(ctypes.c_uint8))
+            return owner, pointer, len(owner)
+
+        if byte_view.readonly:
+            owner = byte_view.tobytes()
+            pointer = ctypes.cast(owner, ctypes.POINTER(ctypes.c_uint8))
+            return owner, pointer, len(owner)
+
+        owner = np.frombuffer(byte_view, dtype=np.uint8)
+        pointer = owner.ctypes.data_as(ctypes.POINTER(ctypes.c_uint8))
+        return owner, pointer, owner.nbytes
+
+    def _require_open(self):
+        if self._handle is None:
+            raise ResourceError(
+                "ImageStream has been released",
+                errcode.HERR_INVALID_IMAGE_STREAM_HANDLE
+            )
 
     def write_to_file(self, file_path: str):
         """
         Write the image stream to a file. Like PATH/image.jpg
         """
+        self._require_open()
         ret = HFDeBugImageStreamDecodeSave(self._handle, file_path)
         check_error(ret, "Write ImageStream to file", file_path=file_path)
 
@@ -134,8 +340,13 @@ class ImageStream(object):
 
         Logs an error if the release fails.
         """
-        if self._handle is not None:
-            ret = HFReleaseImageStream(self._handle)
+        handle = self._handle
+        if handle is not None:
+            self._handle = None
+            try:
+                ret = HFReleaseImageStream(handle)
+            finally:
+                self._data_owner = None
             if ret != 0:
                 logger.warning(f"Failed to release ImageStream: error code {ret}")
 
@@ -143,12 +354,24 @@ class ImageStream(object):
         """
         Ensure that resources are released when the ImageStream object is garbage collected.
         """
+        try:
+            self.release()
+        except Exception:
+            pass
+
+    def __enter__(self):
+        self._require_open()
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
         self.release()
+        return False
 
     def debug_show(self):
         """
         Display the image using a debug function provided by the library.
         """
+        self._require_open()
         HFDeBugImageStreamImShow(self._handle)
 
     @property

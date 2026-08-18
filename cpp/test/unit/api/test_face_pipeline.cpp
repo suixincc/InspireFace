@@ -8,7 +8,7 @@
 #include "../test_helper/test_tools.h"
 #include "../test_helper/test_help.h"
 
-TEST_CASE("test_FaceEmotion", "[face_emotion]") {
+TEST_CASE("test_FaceEmotion", "[face_emotion][model_accuracy]") {
     DRAW_SPLIT_LINE
     TEST_PRINT_OUTPUT(true);
 
@@ -75,7 +75,7 @@ TEST_CASE("test_FaceEmotion", "[face_emotion]") {
     session = nullptr;
 }
 
-TEST_CASE("test_FacePipelineAttribute", "[face_pipeline_attribute]") {
+TEST_CASE("test_FacePipelineAttribute", "[face_pipeline_attribute][model_accuracy]") {
     DRAW_SPLIT_LINE
     TEST_PRINT_OUTPUT(true);
 
@@ -180,7 +180,7 @@ TEST_CASE("test_FacePipelineAttribute", "[face_pipeline_attribute]") {
     REQUIRE(ret == HSUCCEED);
 }
 
-TEST_CASE("test_FacePipeline", "[face_pipeline]") {
+TEST_CASE("test_FacePipeline", "[face_pipeline][model_accuracy]") {
     DRAW_SPLIT_LINE
     TEST_PRINT_OUTPUT(true);
 
@@ -360,7 +360,7 @@ TEST_CASE("test_FacePipeline", "[face_pipeline]") {
     }
 }
 
-TEST_CASE("test_FaceReaction", "[face_reaction]") {
+TEST_CASE("test_FaceReaction", "[face_reaction][model_accuracy]") {
     DRAW_SPLIT_LINE
     TEST_PRINT_OUTPUT(true);
 
@@ -470,7 +470,7 @@ TEST_CASE("test_FaceReaction", "[face_reaction]") {
     REQUIRE(ret == HSUCCEED);
 }
 
-TEST_CASE("test_TrackModeFaceAction", "[face_action]") {
+TEST_CASE("test_TrackModeFaceAction", "[face_action][model_accuracy]") {
     DRAW_SPLIT_LINE
     TEST_PRINT_OUTPUT(true);
 

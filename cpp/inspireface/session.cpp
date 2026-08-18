@@ -11,7 +11,8 @@ public:
 
     int32_t Configure(DetectModuleMode detect_mode, int32_t max_detect_face, CustomPipelineParameter param, int32_t detect_level_px,
                       int32_t track_by_detect_mode_fps) {
-        return m_face_session_->Configuration(detect_mode, max_detect_face, param, detect_level_px, track_by_detect_mode_fps);
+        status_ = m_face_session_->Configuration(detect_mode, max_detect_face, param, detect_level_px, track_by_detect_mode_fps);
+        return status_;
     }
 
     void ClearTrackingFace() {
@@ -53,11 +54,14 @@ public:
     }
 
     int32_t FaceDetectAndTrack(inspirecv::FrameProcess& process, std::vector<FaceTrackWrap>& results) {
+        results.clear();
+        if (status_ != HSUCCEED) {
+            return status_;
+        }
         int32_t ret = m_face_session_->FaceDetectAndTrack(process);
-        if (ret < 0) {
+        if (ret != HSUCCEED) {
             return ret;
         }
-        results.clear();
         const auto& face_data = m_face_session_->GetDetectCache();
         for (const auto& data : face_data) {
             FaceTrackWrap hyper_face_data;
@@ -89,8 +93,12 @@ public:
     }
 
     int32_t FaceFeatureExtract(inspirecv::FrameProcess& process, FaceTrackWrap& data, FaceEmbedding& embedding, bool normalize) {
+        embedding = FaceEmbedding{};
+        if (status_ != HSUCCEED) {
+            return status_;
+        }
         int32_t ret = m_face_session_->FaceFeatureExtract(process, data, normalize);
-        if (ret < 0) {
+        if (ret != HSUCCEED) {
             return ret;
         }
         embedding.isNormal = normalize;
@@ -101,8 +109,12 @@ public:
     }
 
     int32_t FaceFeatureExtractWithAlignmentImage(inspirecv::FrameProcess& process, FaceEmbedding& embedding, bool normalize) {
+        embedding = FaceEmbedding{};
+        if (status_ != HSUCCEED) {
+            return status_;
+        }
         int32_t ret = m_face_session_->FaceFeatureExtractWithAlignmentImage(process, embedding.embedding, embedding.norm, normalize);
-        if (ret < 0) {
+        if (ret != HSUCCEED) {
             return ret;
         }
         embedding.isNormal = normalize;
@@ -111,8 +123,12 @@ public:
     }
 
     int32_t FaceFeatureExtractWithAlignmentImage(const inspirecv::Image& wrapped, FaceEmbedding& embedding, bool normalize) {
+        embedding = FaceEmbedding{};
+        if (status_ != HSUCCEED) {
+            return status_;
+        }
         int32_t ret = m_face_session_->FaceFeatureExtractWithAlignmentImage(wrapped, embedding, embedding.norm, normalize);
-        if (ret < 0) {
+        if (ret != HSUCCEED) {
             return ret;
         }
         embedding.isNormal = normalize;
@@ -131,12 +147,15 @@ public:
 
     int32_t MultipleFacePipelineProcess(inspirecv::FrameProcess& process, const CustomPipelineParameter& param,
                                         const std::vector<FaceTrackWrap>& face_data_list) {
+        if (status_ != HSUCCEED) {
+            return status_;
+        }
         int32_t ret = m_face_session_->FacesProcess(process, face_data_list, param);
         return ret;
     }
 
     std::vector<float> GetRGBLivenessConfidence() {
-        return m_face_session_->GetDetConfidenceCache();
+        return m_face_session_->GetRgbLivenessResultsCache();
     }
 
     std::vector<float> GetFaceMaskConfidence() {
@@ -172,7 +191,7 @@ public:
     }
 
     std::vector<FaceAttributeResult> GetFaceAttributeResult() {
-        auto num = m_face_session_->GetFaceNormalAactionsResultCache().size();
+        auto num = m_face_session_->GetFaceRaceResultsCache().size();
         std::vector<FaceAttributeResult> face_attribute_result;
         face_attribute_result.resize(num);
         for (size_t i = 0; i < num; ++i) {
@@ -195,6 +214,7 @@ public:
 
 
     std::unique_ptr<FaceSession> m_face_session_;
+    int32_t status_{HERR_SESS_INVALID_RESOURCE};
 };
 
 Session::Session() : pImpl(std::make_unique<Impl>()) {}

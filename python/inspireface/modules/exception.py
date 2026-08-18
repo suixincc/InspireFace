@@ -186,11 +186,25 @@ def validate_image_format(image, operation: str = "Image validation"):
         )
     
     h, w, c = image.shape
+    if h <= 0 or w <= 0:
+        raise InvalidInputError(
+            f"{operation}: Image width and height must be positive",
+            errcode.HERR_INVALID_IMAGE_STREAM_PARAM,
+            actual_shape=image.shape
+        )
+
     if c not in [3, 4]:
         raise InvalidInputError(
             f"{operation}: Image must have 3 or 4 channels",
             errcode.HERR_INVALID_IMAGE_STREAM_PARAM,
             actual_channels=c
+        )
+
+    if image.dtype != np.uint8:
+        raise InvalidInputError(
+            f"{operation}: Image data must be uint8",
+            errcode.HERR_INVALID_IMAGE_STREAM_PARAM,
+            actual_dtype=str(image.dtype)
         )
 
 

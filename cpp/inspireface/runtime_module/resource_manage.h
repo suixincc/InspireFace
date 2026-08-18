@@ -94,6 +94,26 @@ public:
         return Release(face_feature_registry_, handle);
     }
 
+    bool isSessionLive(ResourceHandle handle) const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return Contains(session_registry_, handle);
+    }
+
+    bool isStreamLive(ResourceHandle handle) const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return Contains(stream_registry_, handle);
+    }
+
+    bool isImageBitmapLive(ResourceHandle handle) const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return Contains(image_bitmap_registry_, handle);
+    }
+
+    bool isFaceFeatureLive(ResourceHandle handle) const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return Contains(face_feature_registry_, handle);
+    }
+
     std::vector<ResourceHandle> getUnreleasedSessions() const {
         std::lock_guard<std::mutex> lock(mutex_);
         return Snapshot(session_registry_);
@@ -162,6 +182,10 @@ private:
         }
         ++registry.total_released;
         return true;
+    }
+
+    static bool Contains(const Registry &registry, ResourceHandle handle) {
+        return handle != 0 && registry.live_handles.find(handle) != registry.live_handles.end();
     }
 
     static std::vector<ResourceHandle> Snapshot(const Registry &registry) {

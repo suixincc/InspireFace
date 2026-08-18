@@ -264,13 +264,20 @@ FrameProcess::FrameProcess() : pImpl(std::make_unique<Impl>()) {
 
 FrameProcess::~FrameProcess() = default;
 
-FrameProcess::FrameProcess(const FrameProcess &other) : pImpl(std::make_unique<Impl>(*other.pImpl)) {}
+FrameProcess::FrameProcess(const FrameProcess &other)
+: pImpl(other.pImpl ? std::make_unique<Impl>(*other.pImpl) : std::make_unique<Impl>()) {}
 
 FrameProcess::FrameProcess(FrameProcess &&other) noexcept = default;
 
 FrameProcess &FrameProcess::operator=(const FrameProcess &other) {
     if (this != &other) {
-        *pImpl = *other.pImpl;
+        if (!other.pImpl) {
+            pImpl = std::make_unique<Impl>();
+        } else if (!pImpl) {
+            pImpl = std::make_unique<Impl>(*other.pImpl);
+        } else {
+            *pImpl = *other.pImpl;
+        }
     }
     return *this;
 }

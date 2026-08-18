@@ -116,8 +116,8 @@ typedef enum HFRotation {
  */
 typedef struct HFImageData {
     HPUInt8 data;          ///< Pointer to the image data stream.
-    HInt32 width;          ///< Width of the image.
-    HInt32 height;         ///< Height of the image.
+    HInt32 width;          ///< Width of the image. Must be even for NV12, NV21, and I420.
+    HInt32 height;         ///< Height of the image. Must be even for NV12, NV21, and I420.
     HFImageFormat format;  ///< Format of the image, indicating the data stream format to be parsed.
     HFRotation rotation;   ///< Rotation angle of the image.
 } HFImageData, *PHFImageData;
