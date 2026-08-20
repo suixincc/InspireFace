@@ -45,6 +45,26 @@ set_target_properties(FaceTrackBenchmarkSample PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/sample/api/"
 )
 
+# Load the shared SDK through dlopen instead of linking it into the process at
+# startup. This reproduces the loading path that glibc 2.41 hardened.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND ISF_BUILD_SHARED_LIBS)
+        add_executable(LinuxDlopenCompatibilityGuardSample
+                benchmark/linux_dlopen_compatibility_guard.cpp)
+        target_link_libraries(LinuxDlopenCompatibilityGuardSample PRIVATE ${CMAKE_DL_LIBS})
+        add_dependencies(LinuxDlopenCompatibilityGuardSample InspireFace)
+        set_target_properties(LinuxDlopenCompatibilityGuardSample PROPERTIES
+                RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/sample/benchmark/"
+        )
+        if(BUILD_TESTING)
+                add_test(NAME InspireFace.Linux.DlopenCompatibility
+                        COMMAND LinuxDlopenCompatibilityGuardSample "$<TARGET_FILE:InspireFace>")
+                set_tests_properties(InspireFace.Linux.DlopenCompatibility PROPERTIES
+                        LABELS "compatibility;security"
+                        PASS_REGULAR_EXPRESSION "load_result=success"
+                        TIMEOUT 15)
+        endif()
+endif()
+
 # End-to-end correctness/performance guard for internal face-detector changes.
 # It is a sample target so the same benchmark can run on deployment toolchains.
 add_executable(FaceDetectPostprocessBenchmarkSample benchmark/face_detect_postprocess_benchmark.cpp)

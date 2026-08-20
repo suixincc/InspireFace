@@ -38,6 +38,19 @@ jobs:
           bash command/build_linux_ubuntu18.sh
           ls build
 
+      - name: Verify glibc 2.41 dynamic loading
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}/build/inspireface-linux-x86-ubuntu18:/sdk:ro" \
+            -v "${{ github.workspace }}:/workspace:ro" \
+            debian:trixie-slim \
+            bash -ec '
+              apt-get update
+              apt-get install -y --no-install-recommends binutils python3
+              bash /workspace/ci/verify_glibc_241_compatibility.sh \
+                /sdk/InspireFace/lib/libInspireFace.so
+            '
+
   build_macos_x86:
     name: Compile MacOS-x86
     runs-on: macos-13

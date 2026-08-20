@@ -108,6 +108,42 @@ endif()
 
 target_compile_definitions(InspireFace PUBLIC INFERENCE_WRAPPER_ENABLE_MNN)
 target_compile_definitions(InspireFace PUBLIC FEATURE_BLOCK_ENABLE_OPENCV)
+
+# glibc 2.41 rejects dlopen() of a shared object that requests an executable
+# stack. MNN's hand-written assembly is linked into this target and older GNU
+# linkers can conservatively mark the result executable when stack metadata is
+# absent, even though the kernels do not execute code from the stack.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND ISF_BUILD_SHARED_LIBS)
+    target_link_options(InspireFace PRIVATE "-Wl,-z,noexecstack")
+
+    set(ISF_READELF_EXECUTABLE "${CMAKE_READELF}")
+    if(NOT ISF_READELF_EXECUTABLE)
+        find_program(ISF_READELF_EXECUTABLE NAMES llvm-readelf readelf)
+    endif()
+    if(NOT ISF_READELF_EXECUTABLE)
+        message(FATAL_ERROR "readelf is required to verify the Linux SDK stack permissions")
+    endif()
+
+    set(ISF_NOEXECSTACK_VERIFIER "${CMAKE_CURRENT_SOURCE_DIR}/cmake/verify_noexecstack.cmake")
+    add_custom_command(TARGET InspireFace POST_BUILD
+            COMMAND "${CMAKE_COMMAND}"
+                    "-DISF_READELF_EXECUTABLE=${ISF_READELF_EXECUTABLE}"
+                    "-DISF_ELF_FILE=$<TARGET_FILE:InspireFace>"
+                    -P "${ISF_NOEXECSTACK_VERIFIER}"
+            COMMENT "Verifying that libInspireFace does not request an executable stack"
+            VERBATIM)
+
+    if(BUILD_TESTING)
+        add_test(NAME InspireFace.ELF.NoExecStack
+                COMMAND "${CMAKE_COMMAND}"
+                        "-DISF_READELF_EXECUTABLE=${ISF_READELF_EXECUTABLE}"
+                        "-DISF_ELF_FILE=$<TARGET_FILE:InspireFace>"
+                        -P "${ISF_NOEXECSTACK_VERIFIER}")
+        set_tests_properties(InspireFace.ELF.NoExecStack PROPERTIES
+                LABELS "compatibility;security")
+    endif()
+endif()
+
 if(ISF_BUILD_WITH_SAMPLE AND NOT ISF_BUILD_SHARED_LIBS)
     target_compile_definitions(InspireFace PUBLIC ISF_ENABLE_MNN_CACHE_GUARD)
 endif()
@@ -128,8 +164,8 @@ endif ()
 # Add include directory
 set(NEED_INCLUDE ${NEED_INCLUDE} ${CMAKE_CURRENT_SOURCE_DIR}/include/inspireface)
 
-if (ISF_BUILD_LINUX_ARM7 OR ANDROID)
-        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mfpu=neon")
+if (ISF_BUILD_LINUX_ARM7)
+    target_compile_options(InspireFace PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-mfpu=neon>)
 endif()
 
 if (ISF_BUILD_LINUX_ARM7 OR ISF_BUILD_LINUX_AARCH64)
