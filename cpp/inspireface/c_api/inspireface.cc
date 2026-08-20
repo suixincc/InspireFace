@@ -7,6 +7,7 @@
 #include "intypedef.h"
 #include "inspireface_internal.h"
 #include "information.h"
+#include "component_version.h"
 #include "feature_hub_db.h"
 #include <launch.h>
 #include "runtime_module/resource_manage.h"
@@ -16,8 +17,10 @@
 #include "cuda_toolkit.h"
 #endif
 #include <cmath>
+#include <cstring>
 #include <cstdarg>
 #include <fstream>
+#include <limits>
 #include <memory>
 
 #define FACE_FEATURE_SIZE 512  ///< Temporary setup
@@ -25,6 +28,8 @@
 using namespace inspire;
 
 namespace {
+
+constexpr size_t kRockchipDmaHeapPathCapacity = 256;
 
 bool IsValidImageFormat(HFImageFormat format) {
     return format >= HF_STREAM_RGB && format <= HF_STREAM_GRAY;
@@ -38,8 +43,90 @@ bool IsValidImageDimensionsForFormat(HFImageFormat format, HInt32 width, HInt32 
     return width > 0 && height > 0 && (!RequiresEvenDimensions(format) || (width % 2 == 0 && height % 2 == 0));
 }
 
+bool CheckedImageByteSize(HFImageFormat format, HInt32 width, HInt32 height, size_t* byte_size) {
+    if (byte_size == nullptr || !IsValidImageFormat(format) || !IsValidImageDimensionsForFormat(format, width, height)) {
+        return false;
+    }
+    const uint64_t pixels = static_cast<uint64_t>(width) * static_cast<uint64_t>(height);
+    uint64_t bytes = 0;
+    switch (format) {
+        case HF_STREAM_RGB:
+        case HF_STREAM_BGR: bytes = pixels * 3; break;
+        case HF_STREAM_RGBA:
+        case HF_STREAM_BGRA: bytes = pixels * 4; break;
+        case HF_STREAM_GRAY: bytes = pixels; break;
+        case HF_STREAM_YUV_NV12:
+        case HF_STREAM_YUV_NV21:
+        case HF_STREAM_I420: bytes = pixels + pixels / 2; break;
+        default: return false;
+    }
+    if (bytes == 0 || bytes > static_cast<uint64_t>(std::numeric_limits<int>::max()) ||
+        bytes > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
+        return false;
+    }
+    *byte_size = static_cast<size_t>(bytes);
+    return true;
+}
+
+bool CheckedBitmapByteSize(HInt32 width, HInt32 height, HInt32 channels, size_t* byte_size) {
+    if (byte_size == nullptr || width <= 0 || height <= 0 || (channels != 1 && channels != 3)) {
+        return false;
+    }
+    const uint64_t bytes = static_cast<uint64_t>(width) * static_cast<uint64_t>(height) * static_cast<uint64_t>(channels);
+    if (bytes == 0 || bytes > static_cast<uint64_t>(std::numeric_limits<int>::max()) ||
+        bytes > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
+        return false;
+    }
+    *byte_size = static_cast<size_t>(bytes);
+    return true;
+}
+
+bool CanScaleImage(const inspirecv::FrameProcess& process, HInt32 is_rotate, HFloat scale) {
+    if ((is_rotate != 0 && is_rotate != 1) || !std::isfinite(scale) || scale <= 0.0f ||
+        process.GetWidth() <= 0 || process.GetHeight() <= 0) {
+        return false;
+    }
+    const bool swaps_dimensions = is_rotate == 1 &&
+                                  (process.getRotationMode() == inspirecv::ROTATION_90 ||
+                                   process.getRotationMode() == inspirecv::ROTATION_270);
+    const int source_width = swaps_dimensions ? process.GetHeight() : process.GetWidth();
+    const int source_height = swaps_dimensions ? process.GetWidth() : process.GetHeight();
+    const float output_width = static_cast<float>(source_width) * scale;
+    const float output_height = static_cast<float>(source_height) * scale;
+    if (!std::isfinite(output_width) || !std::isfinite(output_height) || output_width < 1.0f || output_height < 1.0f ||
+        output_width >= static_cast<float>(std::numeric_limits<int>::max()) ||
+        output_height >= static_cast<float>(std::numeric_limits<int>::max())) {
+        return false;
+    }
+    const uint64_t elements = static_cast<uint64_t>(static_cast<int>(output_width)) *
+                              static_cast<uint64_t>(static_cast<int>(output_height)) * 3;
+    return elements <= static_cast<uint64_t>(std::numeric_limits<int>::max());
+}
+
 bool IsValidRotation(HFRotation rotation) {
     return rotation >= HF_CAMERA_ROTATION_0 && rotation <= HF_CAMERA_ROTATION_270;
+}
+
+HResult CopyQueryString(const std::string& value, HString buffer, HInt32 buffer_size, HPInt32 required_size) {
+    if (required_size == nullptr || buffer_size < 0 || (buffer == nullptr && buffer_size != 0)) {
+        return HERR_INVALID_PARAM;
+    }
+    if (value.size() >= static_cast<size_t>(std::numeric_limits<HInt32>::max())) {
+        return HERR_INVALID_BUFFER_SIZE;
+    }
+    const HInt32 required = static_cast<HInt32>(value.size() + 1);
+    *required_size = required;
+    if (buffer == nullptr) {
+        return HSUCCEED;
+    }
+    if (buffer_size < required) {
+        if (buffer_size > 0) {
+            buffer[0] = '\0';
+        }
+        return HERR_INVALID_BUFFER_SIZE;
+    }
+    std::memcpy(buffer, value.c_str(), static_cast<size_t>(required));
+    return HSUCCEED;
 }
 
 bool IsLiveStream(HFImageStream handle) {
@@ -69,12 +156,13 @@ HYPER_CAPI_EXPORT extern HResult HFCreateImageStream(PHFImageData data, PHFImage
         return HERR_INVALID_IMAGE_STREAM_HANDLE;
     }
     *handle = nullptr;
-    if (data->data == nullptr || !IsValidImageFormat(data->format) ||
-        !IsValidImageDimensionsForFormat(data->format, data->width, data->height) ||
+    size_t byte_size = 0;
+    if (data->data == nullptr || !CheckedImageByteSize(data->format, data->width, data->height, &byte_size) ||
         !IsValidRotation(data->rotation)) {
         return HERR_INVALID_IMAGE_STREAM_PARAM;
     }
 
+    try {
     std::unique_ptr<HF_CameraStream> stream(new HF_CameraStream());
     switch (data->rotation) {
         case HF_CAMERA_ROTATION_90:
@@ -122,12 +210,19 @@ HYPER_CAPI_EXPORT extern HResult HFCreateImageStream(PHFImageData data, PHFImage
     stream->format = data->format;
     stream->impl.SetDataBuffer(data->data, data->height, data->width);
 
+    const auto resource_handle = reinterpret_cast<inspire::ResourceHandle>(stream.get());
+    if (!RESOURCE_MANAGE->createStream(resource_handle)) {
+        return HERR_UNKNOWN;
+    }
     *handle = static_cast<HFImageStream>(stream.release());
 
-    // Record the creation of this stream in the ResourceManager
-    RESOURCE_MANAGE->createStream(reinterpret_cast<inspire::ResourceHandle>(*handle));
-
     return HSUCCEED;
+    } catch (const std::exception& error) {
+        INSPIRE_LOGE("Failed to create image stream: %s", error.what());
+        return HERR_UNKNOWN;
+    } catch (...) {
+        return HERR_UNKNOWN;
+    }
 }
 
 HYPER_CAPI_EXPORT extern HResult HFCreateImageStreamEmpty(PHFImageStream handle) {
@@ -135,11 +230,17 @@ HYPER_CAPI_EXPORT extern HResult HFCreateImageStreamEmpty(PHFImageStream handle)
         return HERR_INVALID_IMAGE_STREAM_HANDLE;
     }
     *handle = nullptr;
-    auto stream = std::unique_ptr<HF_CameraStream>(new HF_CameraStream());
-    *handle = static_cast<HFImageStream>(stream.release());
-    // Record the creation of this stream in the ResourceManager
-    RESOURCE_MANAGE->createStream(reinterpret_cast<inspire::ResourceHandle>(*handle));
-    return HSUCCEED;
+    try {
+        auto stream = std::unique_ptr<HF_CameraStream>(new HF_CameraStream());
+        const auto resource_handle = reinterpret_cast<inspire::ResourceHandle>(stream.get());
+        if (!RESOURCE_MANAGE->createStream(resource_handle)) {
+            return HERR_UNKNOWN;
+        }
+        *handle = static_cast<HFImageStream>(stream.release());
+        return HSUCCEED;
+    } catch (...) {
+        return HERR_UNKNOWN;
+    }
 }
 
 HYPER_CAPI_EXPORT extern HResult HFImageStreamSetBuffer(HFImageStream handle, HPUInt8 buffer, HInt32 width, HInt32 height) {
@@ -147,9 +248,11 @@ HYPER_CAPI_EXPORT extern HResult HFImageStreamSetBuffer(HFImageStream handle, HP
         return HERR_INVALID_IMAGE_STREAM_HANDLE;
     }
     auto *stream = (HF_CameraStream *)handle;
-    if (buffer == nullptr || !IsValidImageDimensionsForFormat(stream->format, width, height)) {
+    size_t byte_size = 0;
+    if (buffer == nullptr || !CheckedImageByteSize(stream->format, width, height, &byte_size)) {
         return HERR_INVALID_IMAGE_STREAM_PARAM;
     }
+    stream->owned_buffer.clear();
     stream->impl.SetDataBuffer(buffer, height, width);
     return HSUCCEED;
 }
@@ -189,6 +292,13 @@ HYPER_CAPI_EXPORT extern HResult HFImageStreamSetFormat(HFImageStream handle, HF
     if ((stream->impl.GetWidth() > 0 || stream->impl.GetHeight() > 0) &&
         !IsValidImageDimensionsForFormat(format, stream->impl.GetWidth(), stream->impl.GetHeight())) {
         return HERR_INVALID_IMAGE_STREAM_PARAM;
+    }
+    if (!stream->owned_buffer.empty()) {
+        size_t required_size = 0;
+        if (!CheckedImageByteSize(format, stream->impl.GetWidth(), stream->impl.GetHeight(), &required_size) ||
+            required_size > stream->owned_buffer.size()) {
+            return HERR_INVALID_IMAGE_STREAM_PARAM;
+        }
     }
     switch (format) {
         case HF_STREAM_RGB:
@@ -240,15 +350,28 @@ HYPER_CAPI_EXPORT extern HResult HFCreateImageBitmap(PHFImageBitmapData data, PH
         return HERR_INVALID_IMAGE_BITMAP_HANDLE;
     }
     *handle = nullptr;
-    if (data->data == nullptr || data->width <= 0 || data->height <= 0 || (data->channels != 1 && data->channels != 3)) {
+    size_t byte_size = 0;
+    if (data->data == nullptr || !CheckedBitmapByteSize(data->width, data->height, data->channels, &byte_size)) {
         return HERR_INVALID_PARAM;
     }
-    auto bitmap = std::unique_ptr<HF_ImageBitmap>(new HF_ImageBitmap());
-    bitmap->impl.Reset(data->width, data->height, data->channels, data->data);
-    *handle = static_cast<HFImageBitmap>(bitmap.release());
-    // Record the creation of this image bitmap in the ResourceManager
-    RESOURCE_MANAGE->createImageBitmap(reinterpret_cast<inspire::ResourceHandle>(*handle));
-    return HSUCCEED;
+    try {
+        auto bitmap = std::unique_ptr<HF_ImageBitmap>(new HF_ImageBitmap());
+        bitmap->impl.Reset(data->width, data->height, data->channels, data->data);
+        if (bitmap->impl.Empty()) {
+            return HERR_INVALID_PARAM;
+        }
+        const auto resource_handle = reinterpret_cast<inspire::ResourceHandle>(bitmap.get());
+        if (!RESOURCE_MANAGE->createImageBitmap(resource_handle)) {
+            return HERR_UNKNOWN;
+        }
+        *handle = static_cast<HFImageBitmap>(bitmap.release());
+        return HSUCCEED;
+    } catch (const std::exception& error) {
+        INSPIRE_LOGE("Failed to create image bitmap: %s", error.what());
+        return HERR_UNKNOWN;
+    } catch (...) {
+        return HERR_UNKNOWN;
+    }
 }
 
 HYPER_CAPI_EXPORT extern HResult HFCreateImageBitmapFromFilePath(HPath filePath, HInt32 channels, PHFImageBitmap handle) {
@@ -263,30 +386,49 @@ HYPER_CAPI_EXPORT extern HResult HFCreateImageBitmapFromFilePath(HPath filePath,
     if (!image_file.good()) {
         return HERR_IMAGE_STREAM_DECODE_FAILED;
     }
-    auto image = inspirecv::Image::Create(filePath, channels);
-    if (image.Empty()) {
+    try {
+        auto image = inspirecv::Image::Create(filePath, channels);
+        size_t byte_size = 0;
+        if (image.Empty() || !CheckedBitmapByteSize(image.Width(), image.Height(), image.Channels(), &byte_size)) {
+            return HERR_IMAGE_STREAM_DECODE_FAILED;
+        }
+        auto bitmap = std::unique_ptr<HF_ImageBitmap>(new HF_ImageBitmap());
+        bitmap->impl.Reset(image.Width(), image.Height(), image.Channels(), image.Data());
+        const auto resource_handle = reinterpret_cast<inspire::ResourceHandle>(bitmap.get());
+        if (!RESOURCE_MANAGE->createImageBitmap(resource_handle)) {
+            return HERR_UNKNOWN;
+        }
+        *handle = static_cast<HFImageBitmap>(bitmap.release());
+        return HSUCCEED;
+    } catch (const std::exception& error) {
+        INSPIRE_LOGE("Failed to decode image bitmap: %s", error.what());
+        return HERR_IMAGE_STREAM_DECODE_FAILED;
+    } catch (...) {
         return HERR_IMAGE_STREAM_DECODE_FAILED;
     }
-    auto bitmap = std::unique_ptr<HF_ImageBitmap>(new HF_ImageBitmap());
-    bitmap->impl.Reset(image.Width(), image.Height(), image.Channels(), image.Data());
-    *handle = static_cast<HFImageBitmap>(bitmap.release());
-    // Record the creation of this image bitmap in the ResourceManager
-    RESOURCE_MANAGE->createImageBitmap(reinterpret_cast<inspire::ResourceHandle>(*handle));
-    return HSUCCEED;
 }
 
 HYPER_CAPI_EXPORT extern HResult HFImageBitmapCopy(HFImageBitmap handle, PHFImageBitmap copyHandle) {
-    if (copyHandle == nullptr || !IsLiveBitmap(handle)) {
+    if (copyHandle == nullptr) {
         return HERR_INVALID_IMAGE_BITMAP_HANDLE;
     }
     *copyHandle = nullptr;
-    auto bitmap = std::unique_ptr<HF_ImageBitmap>(new HF_ImageBitmap());
-    bitmap->impl.Reset(((HF_ImageBitmap *)handle)->impl.Width(), ((HF_ImageBitmap *)handle)->impl.Height(),
-                       ((HF_ImageBitmap *)handle)->impl.Channels(), ((HF_ImageBitmap *)handle)->impl.Data());
-    *copyHandle = static_cast<HFImageBitmap>(bitmap.release());
-    // Record the creation of this image bitmap in the ResourceManager
-    RESOURCE_MANAGE->createImageBitmap(reinterpret_cast<inspire::ResourceHandle>(*copyHandle));
-    return HSUCCEED;
+    if (!IsLiveBitmap(handle)) {
+        return HERR_INVALID_IMAGE_BITMAP_HANDLE;
+    }
+    try {
+        auto bitmap = std::unique_ptr<HF_ImageBitmap>(new HF_ImageBitmap());
+        bitmap->impl.Reset(((HF_ImageBitmap *)handle)->impl.Width(), ((HF_ImageBitmap *)handle)->impl.Height(),
+                           ((HF_ImageBitmap *)handle)->impl.Channels(), ((HF_ImageBitmap *)handle)->impl.Data());
+        const auto resource_handle = reinterpret_cast<inspire::ResourceHandle>(bitmap.get());
+        if (!RESOURCE_MANAGE->createImageBitmap(resource_handle)) {
+            return HERR_UNKNOWN;
+        }
+        *copyHandle = static_cast<HFImageBitmap>(bitmap.release());
+        return HSUCCEED;
+    } catch (...) {
+        return HERR_UNKNOWN;
+    }
 }
 
 HYPER_CAPI_EXPORT extern HResult HFReleaseImageBitmap(HFImageBitmap handle) {
@@ -302,13 +444,17 @@ HYPER_CAPI_EXPORT extern HResult HFReleaseImageBitmap(HFImageBitmap handle) {
 }
 
 HYPER_CAPI_EXPORT extern HResult HFCreateImageStreamFromImageBitmap(HFImageBitmap handle, HFRotation rotation, PHFImageStream streamHandle) {
-    if (streamHandle == nullptr || !IsLiveBitmap(handle)) {
+    if (streamHandle == nullptr) {
         return HERR_INVALID_IMAGE_STREAM_HANDLE;
     }
     *streamHandle = nullptr;
+    if (!IsLiveBitmap(handle)) {
+        return HERR_INVALID_IMAGE_STREAM_HANDLE;
+    }
     if (!IsValidRotation(rotation)) {
         return HERR_INVALID_IMAGE_STREAM_PARAM;
     }
+    try {
     auto stream = std::unique_ptr<HF_CameraStream>(new HF_CameraStream());
     switch (rotation) {
         case HF_CAMERA_ROTATION_90:
@@ -331,13 +477,25 @@ HYPER_CAPI_EXPORT extern HResult HFCreateImageStreamFromImageBitmap(HFImageBitma
         stream->impl.SetDataFormat(inspirecv::BGR);
         stream->format = HF_STREAM_BGR;
     }
-    stream->impl.SetDataBuffer(((HF_ImageBitmap *)handle)->impl.Data(), ((HF_ImageBitmap *)handle)->impl.Height(),
-                               ((HF_ImageBitmap *)handle)->impl.Width());
+    const auto& image = ((HF_ImageBitmap *)handle)->impl;
+    size_t byte_size = 0;
+    if (!CheckedBitmapByteSize(image.Width(), image.Height(), image.Channels(), &byte_size)) {
+        return HERR_INVALID_IMAGE_STREAM_PARAM;
+    }
+    stream->owned_buffer.assign(image.Data(), image.Data() + byte_size);
+    stream->impl.SetDataBuffer(stream->owned_buffer.data(), image.Height(), image.Width());
+    const auto resource_handle = reinterpret_cast<inspire::ResourceHandle>(stream.get());
+    if (!RESOURCE_MANAGE->createStream(resource_handle)) {
+        return HERR_UNKNOWN;
+    }
     *streamHandle = static_cast<HFImageStream>(stream.release());
-
-    // Record the creation of this stream in the ResourceManager
-    RESOURCE_MANAGE->createStream(reinterpret_cast<inspire::ResourceHandle>(*streamHandle));
     return HSUCCEED;
+    } catch (const std::exception& error) {
+        INSPIRE_LOGE("Failed to create image stream from bitmap: %s", error.what());
+        return HERR_UNKNOWN;
+    } catch (...) {
+        return HERR_UNKNOWN;
+    }
 }
 
 HYPER_CAPI_EXPORT extern HResult HFCreateImageBitmapFromImageStreamProcess(HFImageStream streamHandle, PHFImageBitmap handle, HInt32 is_rotate,
@@ -346,19 +504,32 @@ HYPER_CAPI_EXPORT extern HResult HFCreateImageBitmapFromImageStreamProcess(HFIma
         return HERR_INVALID_IMAGE_BITMAP_HANDLE;
     }
     *handle = nullptr;
-    if (!std::isfinite(scale) || scale <= 0.0f) {
+    auto* stream = static_cast<HF_CameraStream*>(streamHandle);
+    if (!CanScaleImage(stream->impl, is_rotate, scale)) {
         return HERR_INVALID_PARAM;
     }
-    auto bitmap = std::unique_ptr<HF_ImageBitmap>(new HF_ImageBitmap());
-    auto img = ((HF_CameraStream *)streamHandle)->impl.ExecuteImageScaleProcessing(scale, is_rotate);
-    if (img.Empty()) {
+    try {
+        auto bitmap = std::unique_ptr<HF_ImageBitmap>(new HF_ImageBitmap());
+        auto img = stream->impl.ExecuteImageScaleProcessing(scale, is_rotate == 1);
+        if (img.Empty()) {
+            return HERR_DEVICE_IMAGE_PROCESS_FAILURE;
+        }
+        bitmap->impl.Reset(img.Width(), img.Height(), img.Channels(), img.Data());
+        if (bitmap->impl.Empty()) {
+            return HERR_DEVICE_IMAGE_PROCESS_FAILURE;
+        }
+        const auto resource_handle = reinterpret_cast<inspire::ResourceHandle>(bitmap.get());
+        if (!RESOURCE_MANAGE->createImageBitmap(resource_handle)) {
+            return HERR_UNKNOWN;
+        }
+        *handle = static_cast<HFImageBitmap>(bitmap.release());
+        return HSUCCEED;
+    } catch (const std::exception& error) {
+        INSPIRE_LOGE("Failed to process image stream: %s", error.what());
+        return HERR_DEVICE_IMAGE_PROCESS_FAILURE;
+    } catch (...) {
         return HERR_DEVICE_IMAGE_PROCESS_FAILURE;
     }
-    bitmap->impl.Reset(img.Width(), img.Height(), img.Channels(), img.Data());
-    *handle = static_cast<HFImageBitmap>(bitmap.release());
-    // Record the creation of this image bitmap in the ResourceManager
-    RESOURCE_MANAGE->createImageBitmap(reinterpret_cast<inspire::ResourceHandle>(*handle));
-    return HSUCCEED;
 }
 
 HYPER_CAPI_EXPORT extern HResult HFImageBitmapWriteToFile(HFImageBitmap handle, HPath filePath) {
@@ -411,7 +582,11 @@ HYPER_CAPI_EXPORT extern HResult HFImageBitmapDrawCircleF(HFImageBitmap handle, 
 }
 
 HYPER_CAPI_EXPORT extern HResult HFImageBitmapGetData(HFImageBitmap handle, PHFImageBitmapData data) {
-    if (data == nullptr || !IsLiveBitmap(handle)) {
+    if (data == nullptr) {
+        return HERR_INVALID_IMAGE_BITMAP_HANDLE;
+    }
+    *data = {};
+    if (!IsLiveBitmap(handle)) {
         return HERR_INVALID_IMAGE_BITMAP_HANDLE;
     }
     data->width = ((HF_ImageBitmap *)handle)->impl.Width();
@@ -424,6 +599,9 @@ HYPER_CAPI_EXPORT extern HResult HFImageBitmapGetData(HFImageBitmap handle, PHFI
 HYPER_CAPI_EXPORT extern HResult HFImageBitmapShow(HFImageBitmap handle, HString title, HInt32 delay) {
     if (!IsLiveBitmap(handle)) {
         return HERR_INVALID_IMAGE_BITMAP_HANDLE;
+    }
+    if (title == nullptr) {
+        return HERR_INVALID_PARAM;
     }
     ((HF_ImageBitmap *)handle)->impl.Show(title, delay);
     return HSUCCEED;
@@ -528,8 +706,7 @@ HResult HFSwitchLandmarkEngine(HFSessionLandmarkEngine engine) {
         INSPIRE_LOGE("Unsupported Landmark engine.");
         return HERR_INVALID_PARAM;
     }
-    INSPIREFACE_CONTEXT->SwitchLandmarkEngine(type);
-    return HSUCCEED;
+    return INSPIREFACE_CONTEXT->SwitchLandmarkEngine(type);
 }
 
 HResult HFQuerySupportedPixelLevelsForFaceDetection(PHFFaceDetectPixelList pixel_levels) {
@@ -573,18 +750,24 @@ HResult HFCreateInspireFaceSession(HFSessionCustomParameter parameter, HFDetectM
         detMode = inspire::DETECT_MODE_TRACK_BY_DETECT;
     }
 
-    HF_FaceAlgorithmSession *ctx = new HF_FaceAlgorithmSession();
-    auto ret = ctx->impl.Configuration(detMode, maxDetectFaceNum, param, detectPixelLevel, trackByDetectModeFPS);
-    if (ret != HSUCCEED) {
-        delete ctx;
-        *handle = nullptr;
-    } else {
-        *handle = ctx;
-        // Record the creation of this session in the ResourceManager
-        RESOURCE_MANAGE->createSession(reinterpret_cast<inspire::ResourceHandle>(*handle));
+    try {
+        auto ctx = std::unique_ptr<HF_FaceAlgorithmSession>(new HF_FaceAlgorithmSession());
+        const HResult ret = ctx->impl.Configuration(detMode, maxDetectFaceNum, param, detectPixelLevel, trackByDetectModeFPS);
+        if (ret != HSUCCEED) {
+            return ret;
+        }
+        const auto resource_handle = reinterpret_cast<inspire::ResourceHandle>(ctx.get());
+        if (!RESOURCE_MANAGE->createSession(resource_handle)) {
+            return HERR_UNKNOWN;
+        }
+        *handle = static_cast<HFSession>(ctx.release());
+        return HSUCCEED;
+    } catch (const std::exception& error) {
+        INSPIRE_LOGE("Failed to create session: %s", error.what());
+        return HERR_UNKNOWN;
+    } catch (...) {
+        return HERR_UNKNOWN;
     }
-
-    return ret;
 }
 
 HResult HFCreateInspireFaceSessionOptional(HOption customOption, HFDetectMode detectMode, HInt32 maxDetectFaceNum, HInt32 detectPixelLevel,
@@ -635,18 +818,24 @@ HResult HFCreateInspireFaceSessionOptional(HOption customOption, HFDetectMode de
         detMode = inspire::DETECT_MODE_TRACK_BY_DETECT;
     }
 
-    HF_FaceAlgorithmSession *ctx = new HF_FaceAlgorithmSession();
-    auto ret = ctx->impl.Configuration(detMode, maxDetectFaceNum, param, detectPixelLevel, trackByDetectModeFPS);
-    if (ret != HSUCCEED) {
-        delete ctx;
-        *handle = nullptr;
-    } else {
-        *handle = ctx;
-        // Record the creation of this session in the ResourceManager
-        RESOURCE_MANAGE->createSession(reinterpret_cast<inspire::ResourceHandle>(*handle));
+    try {
+        auto ctx = std::unique_ptr<HF_FaceAlgorithmSession>(new HF_FaceAlgorithmSession());
+        const HResult ret = ctx->impl.Configuration(detMode, maxDetectFaceNum, param, detectPixelLevel, trackByDetectModeFPS);
+        if (ret != HSUCCEED) {
+            return ret;
+        }
+        const auto resource_handle = reinterpret_cast<inspire::ResourceHandle>(ctx.get());
+        if (!RESOURCE_MANAGE->createSession(resource_handle)) {
+            return HERR_UNKNOWN;
+        }
+        *handle = static_cast<HFSession>(ctx.release());
+        return HSUCCEED;
+    } catch (const std::exception& error) {
+        INSPIRE_LOGE("Failed to create optional session: %s", error.what());
+        return HERR_UNKNOWN;
+    } catch (...) {
+        return HERR_UNKNOWN;
     }
-
-    return ret;
 }
 
 HResult HFLaunchInspireFace(HPath resourcePath) {
@@ -695,7 +884,7 @@ HResult HFQueryExpansiveHardwareRGACompileOption(HPInt32 enable) {
 }
 
 HResult HFSetExpansiveHardwareRockchipDmaHeapPath(HPath path) {
-    if (path == nullptr) {
+    if (path == nullptr || std::strlen(path) >= kRockchipDmaHeapPathCapacity) {
         return HERR_INVALID_PARAM;
     }
     INSPIREFACE_CONTEXT->SetRockchipDmaHeapPath(path);
@@ -703,10 +892,19 @@ HResult HFSetExpansiveHardwareRockchipDmaHeapPath(HPath path) {
 }
 
 HResult HFQueryExpansiveHardwareRockchipDmaHeapPath(HString path) {
-    if (path == nullptr) {
+    return HFQueryExpansiveHardwareRockchipDmaHeapPathWithSize(path, static_cast<HInt32>(kRockchipDmaHeapPathCapacity));
+}
+
+HResult HFQueryExpansiveHardwareRockchipDmaHeapPathWithSize(HString path, HInt32 bufferSize) {
+    if (path == nullptr || bufferSize <= 0) {
         return HERR_INVALID_PARAM;
     }
-    strcpy(path, INSPIREFACE_CONTEXT->GetRockchipDmaHeapPath().c_str());
+    path[0] = '\0';
+    const std::string value = INSPIREFACE_CONTEXT->GetRockchipDmaHeapPath();
+    if (value.size() + 1 > static_cast<size_t>(bufferSize)) {
+        return HERR_INVALID_BUFFER_SIZE;
+    }
+    std::memcpy(path, value.c_str(), value.size() + 1);
     return HSUCCEED;
 }
 
@@ -945,6 +1143,17 @@ HResult HFSessionSetTrackModeDetectInterval(HFSession session, HInt32 num) {
         return HERR_INVALID_CONTEXT_HANDLE;
     }
     return ctx->impl.SetTrackModeDetectInterval(num);
+}
+
+HResult HFSessionSetLandmarkAugmentationNum(HFSession session, HInt32 num) {
+    if (!IsLiveSession(session)) {
+        return HERR_INVALID_CONTEXT_HANDLE;
+    }
+    if (num <= 0) {
+        return HERR_INVALID_PARAM;
+    }
+    HF_FaceAlgorithmSession *ctx = (HF_FaceAlgorithmSession *)session;
+    return ctx->impl.SetLandmarkLoop(num);
 }
 
 HResult HFExecuteFaceTrack(HFSession session, HFImageStream streamHandle, PHFMultipleFaceData results) {
@@ -1286,9 +1495,11 @@ HResult HFFaceGetFaceAlignmentImage(HFSession session, HFImageStream streamHandl
     if (ret != HSUCCEED) {
         return ret;
     }
+    const auto resource_handle = reinterpret_cast<inspire::ResourceHandle>(bitmap.get());
+    if (!RESOURCE_MANAGE->createImageBitmap(resource_handle)) {
+        return HERR_UNKNOWN;
+    }
     *handle = bitmap.release();
-    // Record the creation of this image bitmap in the ResourceManager
-    RESOURCE_MANAGE->createImageBitmap(reinterpret_cast<inspire::ResourceHandle>(*handle));
     return HSUCCEED;
 }
 
@@ -1415,8 +1626,12 @@ HResult HFFeatureHubInsertFeature(HFFaceFeatureIdentity featureIdentity, HPFaceI
     if (allocId == nullptr) {
         return HERR_INVALID_PARAM;
     }
-    if (featureIdentity.feature == nullptr || featureIdentity.feature->data == nullptr || featureIdentity.feature->size <= 0) {
+    *allocId = -1;
+    if (featureIdentity.feature == nullptr || featureIdentity.feature->data == nullptr) {
         return HERR_INVALID_FACE_FEATURE;
+    }
+    if (featureIdentity.feature->size != FACE_FEATURE_SIZE) {
+        return HERR_FT_HUB_INVALID_FEATURE;
     }
     if (featureIdentity.id < std::numeric_limits<int32_t>::min() || featureIdentity.id > std::numeric_limits<int32_t>::max()) {
         return HERR_INVALID_PARAM;
@@ -1435,8 +1650,11 @@ HResult HFFeatureHubFaceSearch(HFFaceFeature searchFeature, HPFloat confidence, 
     if (confidence == nullptr || mostSimilar == nullptr) {
         return HERR_INVALID_PARAM;
     }
-    if (searchFeature.data == nullptr || searchFeature.size <= 0) {
+    if (searchFeature.data == nullptr) {
         return HERR_INVALID_FACE_FEATURE;
+    }
+    if (searchFeature.size != FACE_FEATURE_SIZE) {
+        return HERR_FT_HUB_INVALID_FEATURE;
     }
     std::vector<float> feat;
     feat.reserve(searchFeature.size);
@@ -1457,9 +1675,9 @@ HResult HFFeatureHubFaceSearch(HFFaceFeature searchFeature, HPFloat confidence, 
     result_feature = std::move(result.feature);
     result_feature_view.data = result_feature.empty() ? nullptr : result_feature.data();
     result_feature_view.size = static_cast<HInt32>(result_feature.size());
-    mostSimilar->feature = &result_feature_view;
     mostSimilar->id = result.id;
     if (mostSimilar->id != -1) {
+        mostSimilar->feature = &result_feature_view;
         *confidence = static_cast<HFloat>(result.similarity);
     }
     return HSUCCEED;
@@ -1472,8 +1690,11 @@ HResult HFFeatureHubFaceSearchTopK(HFFaceFeature searchFeature, HInt32 topK, PHF
     results->size = 0;
     results->confidence = nullptr;
     results->ids = nullptr;
-    if (searchFeature.data == nullptr || searchFeature.size <= 0) {
+    if (searchFeature.data == nullptr) {
         return HERR_INVALID_FACE_FEATURE;
+    }
+    if (searchFeature.size != FACE_FEATURE_SIZE) {
+        return HERR_FT_HUB_INVALID_FEATURE;
     }
     std::vector<float> feat;
     feat.reserve(searchFeature.size);
@@ -1511,8 +1732,11 @@ HResult HFFeatureHubFaceRemove(HFaceId id) {
 }
 
 HResult HFFeatureHubFaceUpdate(HFFaceFeatureIdentity featureIdentity) {
-    if (featureIdentity.feature == nullptr || featureIdentity.feature->data == nullptr || featureIdentity.feature->size <= 0) {
+    if (featureIdentity.feature == nullptr || featureIdentity.feature->data == nullptr) {
         return HERR_INVALID_FACE_FEATURE;
+    }
+    if (featureIdentity.feature->size != FACE_FEATURE_SIZE) {
+        return HERR_FT_HUB_INVALID_FEATURE;
     }
     if (featureIdentity.id < std::numeric_limits<int32_t>::min() || featureIdentity.id > std::numeric_limits<int32_t>::max()) {
         return HERR_INVALID_PARAM;
@@ -1825,8 +2049,7 @@ HResult HFFeatureHubGetFaceCount(HPInt32 count) {
     if (count == nullptr) {
         return HERR_INVALID_PARAM;
     }
-    *count = INSPIREFACE_FEATURE_HUB->GetFaceFeatureCount();
-    return HSUCCEED;
+    return INSPIREFACE_FEATURE_HUB->GetFaceFeatureCount(*count);
 }
 
 HResult HFFeatureHubViewDBTable() {
@@ -1857,6 +2080,27 @@ HResult HFQueryInspireFaceVersion(PHFInspireFaceVersion version) {
     version->patch = atoi(INSPIRE_FACE_VERSION_PATCH_STR);
 
     return HSUCCEED;
+}
+
+HResult HFQueryInspireFaceComponentVersion(HFComponentType component, PHFComponentVersion version) {
+    static_assert(HF_COMPONENT_COUNT == static_cast<int>(inspire::ComponentType::COUNT), "Component enums must remain aligned");
+    if (version == nullptr || component < HF_COMPONENT_MNN || component >= HF_COMPONENT_COUNT) {
+        return HERR_INVALID_PARAM;
+    }
+    const auto component_version = inspire::GetComponentVersion(static_cast<inspire::ComponentType>(component));
+    version->major = component_version.major;
+    version->minor = component_version.minor;
+    version->patch = component_version.patch;
+    version->state = static_cast<HFComponentVersionState>(component_version.state);
+    return HSUCCEED;
+}
+
+HResult HFQueryInspireFaceComponentVersions(HString buffer, HInt32 bufferSize, HPInt32 requiredSize) {
+    return CopyQueryString(inspire::GetComponentVersionsString(), buffer, bufferSize, requiredSize);
+}
+
+HResult HFQueryInspireFaceDiagnosticInformation(HString buffer, HInt32 bufferSize, HPInt32 requiredSize) {
+    return CopyQueryString(inspire::GetDiagnosticInfo(), buffer, bufferSize, requiredSize);
 }
 
 HResult HFQueryInspireFaceExtendedInformation(PHFInspireFaceExtendedInformation information) {

@@ -8,6 +8,7 @@
 
 #include "engine/face_session.h"
 #include "inspireface.h"
+#include <vector>
 
 /**
  * @brief Struct for managing face algorithm session.
@@ -26,6 +27,10 @@ typedef struct HF_FaceAlgorithmSession {
 typedef struct HF_CameraStream {
     inspirecv::FrameProcess impl;  ///< Implementation of the camera stream.
     HFImageFormat format{HF_STREAM_YUV_NV21};  ///< Current source layout for dimension validation.
+    // Normally ImageStream is a non-owning view. Streams created from an
+    // ImageBitmap retain an internal snapshot so releasing or editing the
+    // source bitmap cannot invalidate their pixels.
+    std::vector<uint8_t> owned_buffer;
 } HF_CameraStream;                 ///< Handle for managing camera stream.
 
 /**

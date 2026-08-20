@@ -40,6 +40,13 @@ TEST_CASE("C API image bitmap validates input and copies caller-owned pixels", "
     CHECK(HFCreateImageBitmap(&data, &output) == HERR_INVALID_PARAM);
     data.channels = 3;
 
+    data.width = std::numeric_limits<HInt32>::max();
+    data.height = 2;
+    CHECK(HFCreateImageBitmap(&data, &output) == HERR_INVALID_PARAM);
+    CHECK(output == nullptr);
+    data.width = 4;
+    data.height = 3;
+
     UniqueImageBitmap bitmap;
     REQUIRE(HFCreateImageBitmap(&data, bitmap.Put()) == HSUCCEED);
     std::fill(pixels.begin(), pixels.end(), 0);
@@ -119,6 +126,9 @@ TEST_CASE("C API image bitmap rejects invalid files, transforms, drawing paramet
     CHECK(HFImageBitmapDrawRect(bitmap.Get(), {0, 0, 0, 2}, color, 1) == HERR_INVALID_PARAM);
     CHECK(HFImageBitmapDrawCircle(bitmap.Get(), {0, 0}, -1, color, 1) == HERR_INVALID_PARAM);
     CHECK(HFImageBitmapDrawCircleF(bitmap.Get(), {std::numeric_limits<float>::quiet_NaN(), 0.0f}, 1, color, 1) == HERR_INVALID_PARAM);
+    CHECK(HFImageBitmapShow(bitmap.Get(), nullptr, 0) == HERR_INVALID_PARAM);
+    char unused_title[] = "unused";
+    CHECK(HFImageBitmapShow(nullptr, unused_title, 0) == HERR_INVALID_IMAGE_BITMAP_HANDLE);
 
     UniqueImageStream stream;
     REQUIRE(HFCreateImageStreamFromImageBitmap(bitmap.Get(), HF_CAMERA_ROTATION_0, stream.Put()) == HSUCCEED);
@@ -129,7 +139,12 @@ TEST_CASE("C API image bitmap rejects invalid files, transforms, drawing paramet
     HFImageBitmap stale = bitmap.ReleaseOwnership();
     REQUIRE(HFReleaseImageBitmap(stale) == HSUCCEED);
     CHECK(HFReleaseImageBitmap(stale) == HERR_INVALID_IMAGE_BITMAP_HANDLE);
+    data = {pixels.data(), 8, 8, 3};
     CHECK(HFImageBitmapGetData(stale, &data) == HERR_INVALID_IMAGE_BITMAP_HANDLE);
+    CHECK(data.data == nullptr);
+    CHECK(data.width == 0);
+    CHECK(data.height == 0);
+    CHECK(data.channels == 0);
     CHECK(HFImageBitmapCopy(stale, &output) == HERR_INVALID_IMAGE_BITMAP_HANDLE);
     CHECK(HFImageBitmapWriteToFile(stale, GET_SAVE_DATA("stale.bmp").c_str()) == HERR_INVALID_IMAGE_BITMAP_HANDLE);
 }

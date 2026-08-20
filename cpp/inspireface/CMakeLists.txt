@@ -8,6 +8,11 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3")
 option(ISF_BUILD_SHARED_LIBS "Build shared libraries (DLLs)." ON)
 
 file(GLOB_RECURSE SOURCE_FILES ${CMAKE_CURRENT_SOURCE_DIR}/*.cpp)
+# The factory has used InferenceWrapperRKNNAdapter for both RKNN generations
+# since the adapter was introduced. Do not compile the older parallel
+# implementation, which has no construction site and a separate unsafe output
+# lifecycle.
+list(FILTER SOURCE_FILES EXCLUDE REGEX ".*/middleware/inference_wrapper/inference_wrapper_rknn\\.cpp$")
 set(SOURCE_FILES ${SOURCE_FILES} ${CMAKE_CURRENT_SOURCE_DIR}/c_api/inspireface.cc)        # Add C_API file
 
 
@@ -93,9 +98,6 @@ if(ISF_ENABLE_APPLE_EXTENSION)
     set(SOURCE_FILES ${SOURCE_FILES} ${CMAKE_CURRENT_SOURCE_DIR}/middleware/inference_wrapper/coreml/CoreMLAdapter.mm)
 
 endif()
-
-# MNN
-link_directories(${MNN_LIBS})
 
 if(ISF_BUILD_SHARED_LIBS)
     add_definitions("-DISF_BUILD_SHARED_LIBS")

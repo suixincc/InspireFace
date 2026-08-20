@@ -1,4 +1,5 @@
 #include <string>
+#include <vector>
 
 #include "inspireface/c_api/inspireface.h"
 #include "settings/test_settings.h"
@@ -16,6 +17,27 @@ HInt32 LaunchStatus() {
 }
 
 }  // namespace
+
+TEST_CASE("C API component versions are available before launch", "[api][contract][lifecycle][metadata]") {
+    ScopedSdkTermination cleanup;
+    REQUIRE(LaunchStatus() == HF_STATUS_DISABLE);
+
+    HFComponentVersion mnn_version = {};
+    REQUIRE(HFQueryInspireFaceComponentVersion(HF_COMPONENT_MNN, &mnn_version) == HSUCCEED);
+    CHECK(mnn_version.state == HF_COMPONENT_VERSION_KNOWN);
+
+    HInt32 required_size = 0;
+    REQUIRE(HFQueryInspireFaceComponentVersions(nullptr, 0, &required_size) == HSUCCEED);
+    std::vector<char> versions(static_cast<size_t>(required_size));
+    REQUIRE(HFQueryInspireFaceComponentVersions(versions.data(), required_size, &required_size) == HSUCCEED);
+    CHECK(std::string(versions.data()).find("inspireface=") == 0);
+    HInt32 diagnostic_size = 0;
+    REQUIRE(HFQueryInspireFaceDiagnosticInformation(nullptr, 0, &diagnostic_size) == HSUCCEED);
+    std::vector<char> diagnostics(static_cast<size_t>(diagnostic_size));
+    REQUIRE(HFQueryInspireFaceDiagnosticInformation(diagnostics.data(), diagnostic_size, &diagnostic_size) == HSUCCEED);
+    CHECK(std::string(diagnostics.data()).find("\nComponents: ") != std::string::npos);
+    CHECK(LaunchStatus() == HF_STATUS_DISABLE);
+}
 
 TEST_CASE("C API rejects session creation before launch", "[api][contract][lifecycle]") {
     ScopedSdkTermination cleanup;

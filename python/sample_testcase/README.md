@@ -44,4 +44,4 @@ The `--native-lib` option makes a temporary package copy and replaces only its n
 - Hardware-specific APIs are explicitly listed in the public-API manifest and must be exercised on their matching platform runners.
 - JSON results and latency metrics are written under `benchmark_logs/`, which is ignored by Git.
 
-Known wrapper gaps are represented as `expectedFailure` cases so they remain visible without making every unrelated regression run fail. They must be removed from that state when the corresponding wrapper is repaired.
+Known wrapper gaps must be represented by failing contract tests while they are being repaired; the canonical suite contains no expected-failure exemptions.

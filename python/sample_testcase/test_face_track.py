@@ -48,9 +48,14 @@ def restore_rotated_box(original_width, original_height, box, rotation):
 
 
 class FaceTrackCase(NativeResourceCaseMixin, unittest.TestCase):
-    @unittest.expectedFailure
     def test_custom_parameter_exposes_cpp_face_pose_field(self):
-        ifac.SessionCustomParameter(enable_face_pose=True)
+        parameter = ifac.SessionCustomParameter(
+            enable_detect_mode_landmark=True,
+            enable_face_pose=True,
+        )
+        native = parameter._c_struct()
+        self.assertEqual(native.enable_detect_mode_landmark, 1)
+        self.assertEqual(native.enable_face_pose, 1)
 
     def test_face_and_no_face_detection(self):
         with managed_session(HF_ENABLE_NONE, max_detect_num=3) as session:

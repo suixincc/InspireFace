@@ -1,5 +1,6 @@
 from . import herror as errcode
 from typing import Optional, Dict, Any
+from functools import wraps
 
 
 class InspireFaceError(Exception):
@@ -108,6 +109,8 @@ ERROR_CODE_MAPPING = {
         errcode.HERR_FT_HUB_DISABLE,
         errcode.HERR_FT_HUB_INSERT_FAILURE,
         errcode.HERR_FT_HUB_NOT_FOUND_FEATURE,
+        errcode.HERR_FT_HUB_INVALID_FEATURE,
+        errcode.HERR_FT_HUB_DATABASE_FAILURE,
     ],
 }
 
@@ -208,7 +211,7 @@ def validate_image_format(image, operation: str = "Image validation"):
         )
 
 
-def validate_feature_data(data, operation: str = "Feature validation"):
+def validate_feature_data(data, operation: str = "Feature validation", allow_empty: bool = False):
     """Validate feature data format"""
     import numpy as np
     
@@ -226,6 +229,32 @@ def validate_feature_data(data, operation: str = "Feature validation"):
             actual_dtype=str(data.dtype)
         )
 
+    if data.ndim != 1:
+        raise InvalidInputError(
+            f"{operation}: Feature data must be one-dimensional",
+            errcode.HERR_INVALID_FACE_FEATURE,
+            actual_shape=data.shape
+        )
+
+    if data.size == 0 and not allow_empty:
+        raise InvalidInputError(
+            f"{operation}: Feature data must not be empty",
+            errcode.HERR_INVALID_FACE_FEATURE
+        )
+
+    if not data.flags.c_contiguous:
+        raise InvalidInputError(
+            f"{operation}: Feature data must be C-contiguous",
+            errcode.HERR_INVALID_FACE_FEATURE,
+            actual_strides=data.strides
+        )
+
+    if not np.isfinite(data).all():
+        raise InvalidInputError(
+            f"{operation}: Feature data must contain only finite values",
+            errcode.HERR_INVALID_FACE_FEATURE
+        )
+
 
 def validate_session_initialized(session, operation: str = "Session operation"):
     """Validate if session is initialized"""
@@ -241,6 +270,7 @@ def validate_session_initialized(session, operation: str = "Session operation"):
 def handle_c_api_errors(operation_name: str):
     """Decorator for wrapping C API calls"""
     def decorator(func):
+        @wraps(func)
         def wrapper(*args, **kwargs):
             try:
                 return func(*args, **kwargs)

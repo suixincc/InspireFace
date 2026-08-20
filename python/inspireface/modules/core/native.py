@@ -77,7 +77,6 @@ def get_lib_path():
     
     # Construct the full library path
     dir_path = package_dir / 'libs' / platform_dir / arch
-    os.makedirs(dir_path, exist_ok=True)
     lib_path = dir_path / lib_name
     
     # Verify that the library file exists
@@ -88,10 +87,7 @@ def get_lib_path():
     
     return str(lib_path)
 
-try:    
-    _LIBRARY_FILENAME = get_lib_path()
-except Exception as e:
-    print(e)
+_LIBRARY_FILENAME = get_lib_path()
 
 _int_types = (ctypes.c_int16, ctypes.c_int32)
 if hasattr(ctypes, "c_int64"):
@@ -1283,6 +1279,11 @@ if _libs[_LIBRARY_FILENAME].has("HFQueryExpansiveHardwareRockchipDmaHeapPath", "
     HFQueryExpansiveHardwareRockchipDmaHeapPath.argtypes = [HString]
     HFQueryExpansiveHardwareRockchipDmaHeapPath.restype = HResult
 
+if _libs[_LIBRARY_FILENAME].has("HFQueryExpansiveHardwareRockchipDmaHeapPathWithSize", "cdecl"):
+    HFQueryExpansiveHardwareRockchipDmaHeapPathWithSize = _libs[_LIBRARY_FILENAME].get("HFQueryExpansiveHardwareRockchipDmaHeapPathWithSize", "cdecl")
+    HFQueryExpansiveHardwareRockchipDmaHeapPathWithSize.argtypes = [HString, HInt32]
+    HFQueryExpansiveHardwareRockchipDmaHeapPathWithSize.restype = HResult
+
 enum_HFImageProcessingBackend = c_int# /Users/tunm/work/InspireFace/cpp/inspireface/c_api/inspireface.h: 392
 
 HF_IMAGE_PROCESSING_CPU = 0# /Users/tunm/work/InspireFace/cpp/inspireface/c_api/inspireface.h: 392
@@ -1569,6 +1570,12 @@ if _libs[_LIBRARY_FILENAME].has("HFSessionSetTrackModeDetectInterval", "cdecl"):
     HFSessionSetTrackModeDetectInterval = _libs[_LIBRARY_FILENAME].get("HFSessionSetTrackModeDetectInterval", "cdecl")
     HFSessionSetTrackModeDetectInterval.argtypes = [HFSession, HInt32]
     HFSessionSetTrackModeDetectInterval.restype = HResult
+
+# /Users/tunm/work/InspireFace/cpp/inspireface/c_api/inspireface.h
+if _libs[_LIBRARY_FILENAME].has("HFSessionSetLandmarkAugmentationNum", "cdecl"):
+    HFSessionSetLandmarkAugmentationNum = _libs[_LIBRARY_FILENAME].get("HFSessionSetLandmarkAugmentationNum", "cdecl")
+    HFSessionSetLandmarkAugmentationNum.argtypes = [HFSession, HInt32]
+    HFSessionSetLandmarkAugmentationNum.restype = HResult
 
 # /Users/tunm/work/InspireFace/cpp/inspireface/c_api/inspireface.h: 713
 if _libs[_LIBRARY_FILENAME].has("HFExecuteFaceTrack", "cdecl"):
@@ -2122,6 +2129,66 @@ if _libs[_LIBRARY_FILENAME].has("HFQueryInspireFaceVersion", "cdecl"):
     HFQueryInspireFaceVersion.argtypes = [PHFInspireFaceVersion]
     HFQueryInspireFaceVersion.restype = HResult
 
+enum_HFComponentType = c_int
+
+HF_COMPONENT_MNN = 0
+HF_COMPONENT_INSPIRECV = 1
+HF_COMPONENT_EIGEN = 2
+HF_COMPONENT_SQLITE = 3
+HF_COMPONENT_SQLITE_VEC = 4
+HF_COMPONENT_NLOHMANN_JSON = 5
+HF_COMPONENT_OPENCV = 6
+HF_COMPONENT_TENSORRT = 7
+HF_COMPONENT_CUDA = 8
+HF_COMPONENT_RKNN = 9
+HF_COMPONENT_RGA = 10
+HF_COMPONENT_COREML = 11
+HF_COMPONENT_COUNT = 12
+
+HFComponentType = enum_HFComponentType
+
+enum_HFComponentVersionState = c_int
+
+HF_COMPONENT_VERSION_DISABLED = 0
+HF_COMPONENT_VERSION_KNOWN = 1
+HF_COMPONENT_VERSION_UNKNOWN = 2
+
+HFComponentVersionState = enum_HFComponentVersionState
+
+class struct_HFComponentVersion(Structure):
+    pass
+
+struct_HFComponentVersion.__slots__ = [
+    'major',
+    'minor',
+    'patch',
+    'state',
+]
+struct_HFComponentVersion._fields_ = [
+    ('major', HInt32),
+    ('minor', HInt32),
+    ('patch', HInt32),
+    ('state', HFComponentVersionState),
+]
+
+HFComponentVersion = struct_HFComponentVersion
+PHFComponentVersion = POINTER(struct_HFComponentVersion)
+
+if _libs[_LIBRARY_FILENAME].has("HFQueryInspireFaceComponentVersion", "cdecl"):
+    HFQueryInspireFaceComponentVersion = _libs[_LIBRARY_FILENAME].get("HFQueryInspireFaceComponentVersion", "cdecl")
+    HFQueryInspireFaceComponentVersion.argtypes = [HFComponentType, PHFComponentVersion]
+    HFQueryInspireFaceComponentVersion.restype = HResult
+
+if _libs[_LIBRARY_FILENAME].has("HFQueryInspireFaceComponentVersions", "cdecl"):
+    HFQueryInspireFaceComponentVersions = _libs[_LIBRARY_FILENAME].get("HFQueryInspireFaceComponentVersions", "cdecl")
+    HFQueryInspireFaceComponentVersions.argtypes = [HString, HInt32, HPInt32]
+    HFQueryInspireFaceComponentVersions.restype = HResult
+
+if _libs[_LIBRARY_FILENAME].has("HFQueryInspireFaceDiagnosticInformation", "cdecl"):
+    HFQueryInspireFaceDiagnosticInformation = _libs[_LIBRARY_FILENAME].get("HFQueryInspireFaceDiagnosticInformation", "cdecl")
+    HFQueryInspireFaceDiagnosticInformation.argtypes = [HString, HInt32, HPInt32]
+    HFQueryInspireFaceDiagnosticInformation.restype = HResult
+
 # /Users/tunm/work/InspireFace/cpp/inspireface/c_api/inspireface.h: 1372
 class struct_HFInspireFaceExtendedInformation(Structure):
     pass
@@ -2341,9 +2408,10 @@ HFFaceEmotionResult = struct_HFFaceEmotionResult# /Users/tunm/work/InspireFace/c
 
 HFInspireFaceVersion = struct_HFInspireFaceVersion# /Users/tunm/work/InspireFace/cpp/inspireface/c_api/inspireface.h: 1354
 
+HFComponentVersion = struct_HFComponentVersion
+
 HFInspireFaceExtendedInformation = struct_HFInspireFaceExtendedInformation# /Users/tunm/work/InspireFace/cpp/inspireface/c_api/inspireface.h: 1372
 
 # No inserted files
 
 # No prefix-stripping
-

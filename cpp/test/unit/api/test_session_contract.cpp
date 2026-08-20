@@ -55,6 +55,14 @@ TEST_CASE("C API session creation validates modes, limits, options, and outputs"
     CHECK(output == nullptr);
     CHECK(HFCreateInspireFaceSession(parameter, HF_DETECT_MODE_ALWAYS_DETECT, 0, -1, -1, &output) == HERR_INVALID_PARAM);
     CHECK(HFCreateInspireFaceSessionOptional(0x40000000, HF_DETECT_MODE_ALWAYS_DETECT, 1, -1, -1, &output) == HERR_INVALID_PARAM);
+    CHECK(HFCreateInspireFaceSessionOptional(HF_ENABLE_NONE, HF_DETECT_MODE_TRACK_BY_DETECTION, 1, -1, 0, &output) == HERR_INVALID_PARAM);
+    CHECK(output == nullptr);
+
+    REQUIRE(HFCreateInspireFaceSessionOptional(HF_ENABLE_NONE, HF_DETECT_MODE_ALWAYS_DETECT, 1,
+                                                std::numeric_limits<HInt32>::min(), -1, &output) == HSUCCEED);
+    REQUIRE(output != nullptr);
+    REQUIRE(HFReleaseInspireFaceSession(output) == HSUCCEED);
+    output = nullptr;
 
     const std::array<HFDetectMode, 3> modes = {
       {HF_DETECT_MODE_ALWAYS_DETECT, HF_DETECT_MODE_LIGHT_TRACK, HF_DETECT_MODE_TRACK_BY_DETECTION}};
@@ -98,6 +106,9 @@ TEST_CASE("C API session setters enforce documented domains", "[api][contract][s
     CHECK(HFSessionSetTrackModeNumSmoothCacheFrame(session.Get(), 0) == HERR_INVALID_PARAM);
     CHECK(HFSessionSetTrackModeDetectInterval(session.Get(), 1) == HSUCCEED);
     CHECK(HFSessionSetTrackModeDetectInterval(session.Get(), 0) == HERR_INVALID_PARAM);
+    CHECK(HFSessionSetLandmarkAugmentationNum(session.Get(), 1) == HSUCCEED);
+    CHECK(HFSessionSetLandmarkAugmentationNum(session.Get(), 3) == HSUCCEED);
+    CHECK(HFSessionSetLandmarkAugmentationNum(session.Get(), 0) == HERR_INVALID_PARAM);
 
     CHECK(HFSessionSetEnableTrackCostSpend(session.Get(), 0) == HSUCCEED);
     CHECK(HFSessionSetEnableTrackCostSpend(session.Get(), 1) == HSUCCEED);
@@ -148,6 +159,7 @@ TEST_CASE("C API face tracking resets no-face outputs and rejects invalid handle
     CHECK(HFReleaseInspireFaceSession(stale) == HERR_INVALID_CONTEXT_HANDLE);
     CHECK(HFSessionClearTrackingFace(stale) == HERR_INVALID_CONTEXT_HANDLE);
     CHECK(HFSessionSetFaceDetectThreshold(stale, 0.5f) == HERR_INVALID_CONTEXT_HANDLE);
+    CHECK(HFSessionSetLandmarkAugmentationNum(stale, 1) == HERR_INVALID_CONTEXT_HANDLE);
     CHECK(HFExecuteFaceTrack(stale, face_stream.stream.Get(), &faces) == HERR_INVALID_CONTEXT_HANDLE);
 }
 

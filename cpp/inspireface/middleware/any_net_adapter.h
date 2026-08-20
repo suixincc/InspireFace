@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cmath>
 #include <exception>
+#include <limits>
 #include <utility>
 #include <inspirecv/inspirecv.h>
 #include "data_type.h"
@@ -71,6 +72,7 @@ public:
      * @return int32_t Status of the loading and initialization process.
      */
     int32_t LoadData(InspireModel &model, InferenceWrapper::EngineType type = InferenceWrapper::INFER_MNN, bool dynamic = false) {
+        m_ready_ = false;
         m_infer_type_ = type;
         try {
             // must
@@ -135,8 +137,31 @@ public:
         std::vector<int> input_size = getData<std::vector<int>>("input_size");
         std::vector<float> mean = getData<std::vector<float>>("mean");
         std::vector<float> norm = getData<std::vector<float>>("norm");
-        if (outputs_layers.empty() || input_size.size() < 2 || input_size[0] <= 0 || input_size[1] <= 0 || mean.size() < 3 || norm.size() < 3 ||
-            (!model.loadFilePath && (model.buffer == nullptr || model.bufferSize == 0))) {
+        const int data_type = getData<int>("data_type");
+        const int channel = getData<int>("input_channel");
+        const int image_channel = getData<int>("input_image_channel");
+        const int threads = getData<int>("threads");
+        bool normalization_valid = mean.size() >= 3 && norm.size() >= 3;
+        for (size_t index = 0; normalization_valid && index < 3; ++index) {
+            normalization_valid = std::isfinite(mean[index]) && std::isfinite(norm[index]) && norm[index] != 0.0f;
+            if (normalization_valid && m_infer_type_ == InferenceWrapper::INFER_MNN) {
+                const float converted_mean = mean[index] * 255.0f;
+                const float converted_norm = 1.0f / (norm[index] * 255.0f);
+                normalization_valid = std::isfinite(converted_mean) && std::isfinite(converted_norm);
+            }
+        }
+        bool shape_valid = input_size.size() >= 2 && input_size[0] > 0 && input_size[1] > 0 && channel > 0;
+        if (shape_valid) {
+            const int64_t element_count = static_cast<int64_t>(input_size[0]) * input_size[1] * channel;
+            shape_valid = element_count > 0 && element_count <= std::numeric_limits<int32_t>::max();
+        }
+        const bool channel_valid = data_type == InputTensorInfo::DataTypeImage
+                                     ? (channel == 1 || channel == 3) && (image_channel == 1 || image_channel == 3) &&
+                                         (m_infer_type_ == InferenceWrapper::INFER_MNN || image_channel == channel)
+                                     : image_channel > 0;
+        if (outputs_layers.empty() || !shape_valid || !channel_valid || !normalization_valid || threads <= 0 ||
+            (!model.loadFilePath && (model.buffer == nullptr || model.bufferSize == 0 ||
+                                     model.bufferSize > static_cast<size_t>(std::numeric_limits<int>::max())))) {
             INSPIRE_LOGE("Invalid model configuration for %s", m_name_.c_str());
             return InferenceWrapper::WrapperError;
         }
@@ -166,15 +191,13 @@ public:
         int width = input_size[0];
         int height = input_size[1];
         m_input_image_size_ = {width, height};
-        int channel = getData<int>("input_channel");
         if (getData<bool>("nchw")) {
             input_tensor_info.tensor_dims = {1, channel, m_input_image_size_.GetHeight(), m_input_image_size_.GetWidth()};
         } else {
             input_tensor_info.tensor_dims = {1, m_input_image_size_.GetHeight(), m_input_image_size_.GetWidth(), channel};
         }
 
-        input_tensor_info.data_type = getData<int>("data_type");
-        int image_channel = getData<int>("input_image_channel");
+        input_tensor_info.data_type = data_type;
         input_tensor_info.image_info.channel = image_channel;
 
         input_tensor_info.normalize.mean[0] = mean[0];
@@ -186,7 +209,7 @@ public:
 
         input_tensor_info.image_info.width = width;
         input_tensor_info.image_info.height = height;
-        input_tensor_info.image_info.channel = channel;
+        input_tensor_info.image_info.channel = image_channel;
         input_tensor_info.image_info.crop_x = 0;
         input_tensor_info.image_info.crop_y = 0;
         input_tensor_info.image_info.crop_width = width;
@@ -204,10 +227,15 @@ public:
             }
         }
 
-        return 0;
+        m_ready_ = true;
+        return InferenceWrapper::WrapperOk;
     }
 
     int32_t Forward(const inspirecv::Image &image, AnyTensorOutputs &outputs) {
+        outputs.clear();
+        if (!ValidateImageInput(image)) {
+            return InferenceWrapper::WrapperError;
+        }
         InputTensorInfo &input_tensor_info = getMInputTensorInfoList()[0];
         if (m_infer_type_ == InferenceWrapper::INFER_RKNN) {
             if (getData<bool>("swap_color")) {
@@ -223,6 +251,10 @@ public:
     }
 
     int32_t ForwardViews(const inspirecv::Image &image, AnyTensorViews &outputs) {
+        outputs.clear();
+        if (!ValidateImageInput(image)) {
+            return InferenceWrapper::WrapperError;
+        }
         InputTensorInfo &input_tensor_info = getMInputTensorInfoList()[0];
         if (m_infer_type_ == InferenceWrapper::INFER_RKNN && getData<bool>("swap_color")) {
             m_cache_ = image.SwapRB();
@@ -239,6 +271,11 @@ public:
      */
     int32_t ForwardViews(AnyTensorViews &outputs) {
         outputs.clear();
+        if (!m_ready_ || m_nn_inference_ == nullptr || m_input_tensor_info_list_.size() != 1 ||
+            m_input_tensor_info_list_.front().data == nullptr || m_output_tensor_info_list_.empty()) {
+            INSPIRE_LOGE("%s is not ready for inference", m_name_.c_str());
+            return InferenceWrapper::WrapperError;
+        }
         if (m_nn_inference_->PreProcess(m_input_tensor_info_list_) != InferenceWrapper::WrapperOk) {
             INSPIRE_LOGE("%s preprocessing failed", m_name_.c_str());
             return InferenceWrapper::WrapperError;
@@ -249,13 +286,14 @@ public:
         }
         outputs.reserve(m_output_tensor_info_list_.size());
         for (auto &tensor : m_output_tensor_info_list_) {
+            const int32_t element_count = tensor.GetElementNum();
             const float *data = tensor.GetDataAsFloat();
-            if (data == nullptr) {
+            if (data == nullptr || element_count <= 0) {
                 outputs.clear();
-                INSPIRE_LOGE("%s output tensor '%s' has unsupported data type", m_name_.c_str(), tensor.name.c_str());
+                INSPIRE_LOGE("%s output tensor '%s' is invalid", m_name_.c_str(), tensor.name.c_str());
                 return InferenceWrapper::WrapperError;
             }
-            outputs.emplace_back(&tensor.name, data, static_cast<size_t>(tensor.GetElementNum()));
+            outputs.emplace_back(&tensor.name, data, static_cast<size_t>(element_count));
         }
         return InferenceWrapper::WrapperOk;
     }
@@ -359,6 +397,23 @@ public:
     }
 
 protected:
+    bool ValidateImageInput(const inspirecv::Image &image) const {
+        if (!m_ready_ || m_nn_inference_ == nullptr || m_input_tensor_info_list_.size() != 1 || image.Empty() ||
+            image.Data() == nullptr) {
+            INSPIRE_LOGE("Invalid image input for %s", m_name_.c_str());
+            return false;
+        }
+        const auto &image_info = m_input_tensor_info_list_.front().image_info;
+        if (image.Width() != image_info.width || image.Height() != image_info.height ||
+            image.Channels() != image_info.channel) {
+            INSPIRE_LOGE("Image shape mismatch for %s: got %dx%dx%d, expected %dx%dx%d", m_name_.c_str(),
+                         image.Width(), image.Height(), image.Channels(), image_info.width, image_info.height,
+                         image_info.channel);
+            return false;
+        }
+        return true;
+    }
+
     int32_t ResizeImageForInference(const inspirecv::Image &source, int target_width, int target_height,
                                     inspirecv::Image &output) {
         output = {};
@@ -422,7 +477,8 @@ protected:
     std::unique_ptr<nexus::ImageProcessor> m_processor_;  ///< Assign a nexus processor to each anynet object
 
 private:
-    InferenceWrapper::EngineType m_infer_type_;                ///< Inference engine type
+    InferenceWrapper::EngineType m_infer_type_ = InferenceWrapper::INFER_MNN;  ///< Inference engine type
+    bool m_ready_ = false;                                     ///< Whether initialization completed successfully.
     std::shared_ptr<InferenceWrapper> m_nn_inference_;         ///< Shared pointer to the inference helper.
     std::vector<InputTensorInfo> m_input_tensor_info_list_;    ///< List of input tensor information.
     std::vector<OutputTensorInfo> m_output_tensor_info_list_;  ///< List of output tensor information.
@@ -432,13 +488,18 @@ private:
 
 template <typename ImageT, typename TensorT>
 AnyTensorOutputs ForwardService(std::shared_ptr<AnyNetAdapter> net, const ImageT &input, std::function<void(const ImageT &, TensorT &)> transform) {
+    if (net == nullptr || net->getMInputTensorInfoList().size() != 1 || !transform) {
+        return {};
+    }
     InputTensorInfo &input_tensor_info = net->getMInputTensorInfoList()[0];
     TensorT transform_tensor;
     transform(input, transform_tensor);
     input_tensor_info.data = transform_tensor.data;  // input tensor only support cv2::Mat
 
     AnyTensorOutputs outputs;
-    net->Forward(outputs);
+    if (net->Forward(outputs) != InferenceWrapper::WrapperOk) {
+        outputs.clear();
+    }
 
     return outputs;
 }
@@ -461,13 +522,18 @@ AnyTensorOutputs ForwardService(std::shared_ptr<AnyNetAdapter> net, const ImageT
 template <typename ImageT, typename TensorT, typename PreprocessCallbackT>
 AnyTensorOutputs ForwardService(std::shared_ptr<AnyNetAdapter> net, const ImageT &input, PreprocessCallbackT &callback,
                                 std::function<void(const ImageT &, TensorT &, PreprocessCallbackT &)> transform) {
+    if (net == nullptr || net->getMInputTensorInfoList().size() != 1 || !transform) {
+        return {};
+    }
     InputTensorInfo &input_tensor_info = net->getMInputTensorInfoList()[0];
     TensorT transform_tensor;
     transform(input, transform_tensor, callback);
     input_tensor_info.data = transform_tensor.data;  // input tensor only support cv2::Mat
 
     AnyTensorOutputs outputs;
-    net->Forward(outputs);
+    if (net->Forward(outputs) != InferenceWrapper::WrapperOk) {
+        outputs.clear();
+    }
 
     return outputs;
 }

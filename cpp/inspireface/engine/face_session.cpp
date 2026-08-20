@@ -4,6 +4,7 @@
  */
 
 #include "face_session.h"
+#include <cmath>
 #include <launch.h>
 #include <utility>
 #include "log.h"
@@ -17,6 +18,10 @@ FaceSession::FaceSession() = default;
 
 int32_t FaceSession::Configuration(DetectModuleMode detect_mode, int32_t max_detect_face, CustomPipelineParameter param, int32_t detect_level_px,
                                    int32_t track_by_detect_mode_fps) {
+    if (detect_mode < DETECT_MODE_ALWAYS_DETECT || detect_mode > DETECT_MODE_TRACK_BY_DETECT || max_detect_face <= 0 ||
+        (detect_mode == DETECT_MODE_TRACK_BY_DETECT && track_by_detect_mode_fps == 0)) {
+        return HERR_INVALID_PARAM;
+    }
     auto archive = INSPIREFACE_CONTEXT->AcquireArchive();
     if (!archive) {
         return HERR_ARCHIVE_NOT_LOAD;
@@ -135,11 +140,17 @@ int32_t FaceSession::FaceDetectAndTrack(inspirecv::FrameProcess& process) {
 }
 
 int32_t FaceSession::SetLandmarkLoop(int32_t value) {
-    // TODO: implement this function
+    if (m_face_track_ == nullptr || value <= 0) {
+        return HERR_INVALID_PARAM;
+    }
+    m_face_track_->SetMultiscaleLandmarkLoop(value);
     return HSUCCEED;
 }
 
 int32_t FaceSession::SetFaceDetectThreshold(float value) {
+    if (m_face_track_ == nullptr || !std::isfinite(value) || value < 0.0f || value > 1.0f) {
+        return HERR_INVALID_PARAM;
+    }
     m_face_track_->SetDetectThreshold(value);
     return HSUCCEED;
 }
@@ -507,6 +518,9 @@ void FaceSession::SetLightTrackConfidenceThreshold(float value) {
 }
 
 int32_t FaceSession::SetTrackPreviewSize(const int32_t preview_size) {
+    if (m_face_track_ == nullptr || preview_size == 0 || preview_size < -1) {
+        return HERR_INVALID_PARAM;
+    }
     m_face_track_->SetTrackPreviewSize(preview_size);
     return HSUCCEED;
 }
@@ -516,21 +530,33 @@ int32_t FaceSession::GetTrackPreviewSize() const {
 }
 
 int32_t FaceSession::SetTrackFaceMinimumSize(int32_t minSize) {
+    if (m_face_track_ == nullptr || minSize < 0) {
+        return HERR_INVALID_PARAM;
+    }
     m_face_track_->SetMinimumFacePxSize(minSize);
     return HSUCCEED;
 }
 
 int32_t FaceSession::SetTrackModeSmoothRatio(float value) {
+    if (m_face_track_ == nullptr || !std::isfinite(value) || value < 0.0f || value > 1.0f) {
+        return HERR_INVALID_PARAM;
+    }
     m_face_track_->SetTrackModeSmoothRatio(value);
     return HSUCCEED;
 }
 
 int32_t FaceSession::SetTrackModeNumSmoothCacheFrame(int value) {
+    if (m_face_track_ == nullptr || value <= 0) {
+        return HERR_INVALID_PARAM;
+    }
     m_face_track_->SetTrackModeNumSmoothCacheFrame(value);
     return HSUCCEED;
 }
 
 int32_t FaceSession::SetTrackModeDetectInterval(int value) {
+    if (m_face_track_ == nullptr || value <= 0) {
+        return HERR_INVALID_PARAM;
+    }
     m_face_track_->SetTrackModeDetectInterval(value);
     return HSUCCEED;
 }

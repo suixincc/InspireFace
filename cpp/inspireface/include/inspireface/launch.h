@@ -110,7 +110,7 @@ public:
     std::vector<std::string> GetFaceDetectModelList() const;
 
     // Switch the landmark engine(It must be used before creating a session)
-    void SwitchLandmarkEngine(LandmarkEngine engine);
+    int32_t SwitchLandmarkEngine(LandmarkEngine engine);
 
     // Switch the image processing backend(It must be used before creating a session)
     void SwitchImageProcessingBackend(ImageProcessingBackend backend);

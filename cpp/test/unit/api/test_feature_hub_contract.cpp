@@ -52,6 +52,9 @@ TEST_CASE("C API FeatureHub state machine and CRUD are deterministic", "[api][co
     HFaceId allocated_id = -1;
     CHECK(HFFeatureHubInsertFeature(first_identity, &allocated_id) == HERR_FT_HUB_DISABLE);
     CHECK(HFFeatureHubFaceRemove(42) == HERR_FT_HUB_DISABLE);
+    HInt32 disabled_count = -1;
+    CHECK(HFFeatureHubGetFaceCount(&disabled_count) == HERR_FT_HUB_DISABLE);
+    CHECK(disabled_count == 0);
 
     REQUIRE(HFFeatureHubDataEnable(MemoryConfiguration()) == HSUCCEED);
     CHECK(HFFeatureHubDataEnable(MemoryConfiguration()) == HSUCCEED);
@@ -82,6 +85,15 @@ TEST_CASE("C API FeatureHub state machine and CRUD are deterministic", "[api][co
     REQUIRE(HFFeatureHubFaceSearch(first_view, &confidence, &match) == HSUCCEED);
     CHECK(match.id == 42);
     CHECK(confidence == Approx(1.0f).margin(1e-6f));
+
+    REQUIRE(HFFeatureHubFaceSearchThresholdSetting(1.0f) == HSUCCEED);
+    match = {7, reinterpret_cast<PHFFaceFeature>(static_cast<uintptr_t>(1))};
+    confidence = 7.0f;
+    REQUIRE(HFFeatureHubFaceSearch(second_view, &confidence, &match) == HSUCCEED);
+    CHECK(match.id == -1);
+    CHECK(match.feature == nullptr);
+    CHECK(confidence == -1.0f);
+    REQUIRE(HFFeatureHubFaceSearchThresholdSetting(-1.0f) == HSUCCEED);
 
     HFSearchTopKResults top_k = {};
     REQUIRE(HFFeatureHubFaceSearchTopK(first_view, 5, &top_k) == HSUCCEED);
@@ -146,11 +158,16 @@ TEST_CASE("C API FeatureHub validates configuration, vector contents, IDs, and o
     HFFaceFeature valid_view = View(valid);
     HFFaceFeature short_view = View(short_feature);
     HFFaceFeature non_finite_view = View(non_finite);
+    float sentinel = 1.0f;
+    HFFaceFeature oversized_view = {std::numeric_limits<HInt32>::max(), &sentinel};
     HFaceId id = -1;
 
     CHECK(HFFeatureHubInsertFeature({1, &short_view}, &id) == HERR_FT_HUB_INVALID_FEATURE);
     CHECK(HFFeatureHubInsertFeature({1, &non_finite_view}, &id) == HERR_FT_HUB_INVALID_FEATURE);
     CHECK(HFFeatureHubInsertFeature({1, &valid_view}, nullptr) == HERR_INVALID_PARAM);
+    id = 77;
+    CHECK(HFFeatureHubInsertFeature({1, &oversized_view}, &id) == HERR_FT_HUB_INVALID_FEATURE);
+    CHECK(id == -1);
     CHECK(HFFeatureHubInsertFeature({std::numeric_limits<int64_t>::max(), &valid_view}, &id) == HERR_INVALID_PARAM);
     CHECK(HFFeatureHubFaceUpdate({std::numeric_limits<int64_t>::min(), &valid_view}) == HERR_INVALID_PARAM);
     CHECK(HFFeatureHubFaceRemove(std::numeric_limits<int64_t>::max()) == HERR_INVALID_PARAM);
@@ -158,15 +175,18 @@ TEST_CASE("C API FeatureHub validates configuration, vector contents, IDs, and o
     float confidence = 4.0f;
     HFFaceFeatureIdentity match = {7, nullptr};
     CHECK(HFFeatureHubFaceSearch(short_view, &confidence, &match) == HERR_FT_HUB_INVALID_FEATURE);
+    CHECK(HFFeatureHubFaceSearch(oversized_view, &confidence, &match) == HERR_FT_HUB_INVALID_FEATURE);
     CHECK(HFFeatureHubFaceSearch(valid_view, nullptr, &match) == HERR_INVALID_PARAM);
     CHECK(HFFeatureHubFaceSearch(valid_view, &confidence, nullptr) == HERR_INVALID_PARAM);
 
     HFSearchTopKResults top_k = {7, reinterpret_cast<float*>(1), reinterpret_cast<HFaceId*>(1)};
     CHECK(HFFeatureHubFaceSearchTopK(valid_view, 0, &top_k) == HERR_INVALID_PARAM);
     CHECK(HFFeatureHubFaceSearchTopK(short_view, 1, &top_k) == HERR_FT_HUB_INVALID_FEATURE);
+    CHECK(HFFeatureHubFaceSearchTopK(oversized_view, 1, &top_k) == HERR_FT_HUB_INVALID_FEATURE);
     CHECK(top_k.size == 0);
     CHECK(top_k.confidence == nullptr);
     CHECK(top_k.ids == nullptr);
+    CHECK(HFFeatureHubFaceUpdate({1, &oversized_view}) == HERR_FT_HUB_INVALID_FEATURE);
 
     float comparison = 9.0f;
     CHECK(HFFaceComparison(short_view, short_view, &comparison) == HERR_INVALID_FACE_FEATURE);

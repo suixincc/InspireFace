@@ -29,6 +29,9 @@ public:
     ~TensorInfo() = default;
 
     int32_t GetElementNum() const {
+        if (tensor_dims.empty()) {
+            return -1;
+        }
         int32_t element_num = 1;
         for (const auto& dim : tensor_dims) {
             if (dim <= 0 || element_num > std::numeric_limits<int32_t>::max() / dim) {
@@ -151,14 +154,11 @@ public:
     ~OutputTensorInfo() = default;
 
     float* GetDataAsFloat() {
-        if (data == nullptr) {
+        const int32_t element_num = GetElementNum();
+        if (data == nullptr || element_num <= 0) {
             return nullptr;
         }
         if (tensor_type == TensorTypeUint8 || tensor_type == TensorTypeInt8) {
-            const int32_t element_num = GetElementNum();
-            if (element_num <= 0) {
-                return nullptr;
-            }
             data_fp32_.resize(static_cast<size_t>(element_num));
             if (tensor_type == TensorTypeUint8) {
                 const auto* values = static_cast<const uint8_t*>(data);

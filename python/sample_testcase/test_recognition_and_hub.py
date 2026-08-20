@@ -92,6 +92,7 @@ class FeatureHubCase(NativeResourceCaseMixin, unittest.TestCase):
             identity = ifac.feature_hub_get_face_identity(101)
             self.assertEqual(identity.id, 101)
             np.testing.assert_allclose(identity.feature, first, rtol=0.0, atol=1e-6)
+            identity_snapshot = identity.feature.copy()
 
             result = ifac.feature_hub_face_search(first)
             self.assertEqual(result.similar_identity.id, 101)
@@ -103,8 +104,15 @@ class FeatureHubCase(NativeResourceCaseMixin, unittest.TestCase):
             self.assertTrue(ifac.feature_hub_face_update(ifac.FaceIdentity(third, 101)))
             updated = ifac.feature_hub_face_search(third)
             self.assertEqual(updated.similar_identity.id, 101)
+            np.testing.assert_array_equal(identity.feature, identity_snapshot)
             self.assertTrue(ifac.feature_hub_face_remove(202))
             self.assertEqual(ifac.feature_hub_get_face_count(), 1)
+
+    def test_face_identity_owns_feature_memory(self):
+        feature = np.arange(512, dtype=np.float32)
+        identity = ifac.FaceIdentity(feature, 303)
+        feature[:] = -1.0
+        self.assertEqual(identity.feature[10], 10.0)
 
     def test_auto_increment_allocates_unique_ids(self):
         first, second, _ = three_features()

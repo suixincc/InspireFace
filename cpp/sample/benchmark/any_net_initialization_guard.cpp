@@ -2,9 +2,11 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
+#include <functional>
 #include <iomanip>
 #include <iostream>
 #include <memory>
+#include <limits>
 #include <numeric>
 #include <string>
 #include <utility>
@@ -355,6 +357,104 @@ bool RunFailureRecoveryGate(inspire::InspireArchive& archive, const std::vector<
     return exact && latency;
 }
 
+bool RunMetadataBoundaryGate(inspire::InspireArchive& archive) {
+    auto rejects = [&](const std::string& name, const std::function<void(inspire::InspireModel&)>& mutate) {
+        inspire::InspireModel model;
+        if (archive.LoadModel("face_detect_160", model) != inspire::SARC_SUCCESS) {
+            return false;
+        }
+        mutate(model);
+        inspire::AnyNetAdapter net("AnyNetInitializationGuard/boundary/" + name);
+        return net.LoadData(model, model.modelType) == InferenceWrapper::WrapperError;
+    };
+
+    bool passed = true;
+    passed = rejects("zero-norm", [](inspire::InspireModel& model) {
+        model.Config().set<std::vector<float>>("norm", {1.0f, 0.0f, 1.0f});
+    }) && passed;
+    passed = rejects("nan-mean", [](inspire::InspireModel& model) {
+        model.Config().set<std::vector<float>>("mean", {0.0f, std::numeric_limits<float>::quiet_NaN(), 0.0f});
+    }) && passed;
+    passed = rejects("image-channel", [](inspire::InspireModel& model) {
+        model.Config().set<int>("input_image_channel", 2);
+    }) && passed;
+    passed = rejects("tensor-channel", [](inspire::InspireModel& model) {
+        model.Config().set<int>("input_channel", 4);
+    }) && passed;
+    passed = rejects("shape-overflow", [](inspire::InspireModel& model) {
+        model.Config().set<std::vector<int>>("input_size", {std::numeric_limits<int>::max(), 2});
+    }) && passed;
+    passed = rejects("threads", [](inspire::InspireModel& model) {
+        model.Config().set<int>("threads", 0);
+    }) && passed;
+    passed = rejects("buffer-size", [](inspire::InspireModel& model) {
+        model.bufferSize = static_cast<size_t>(std::numeric_limits<int>::max()) + 1;
+        model.loadFilePath = 0;
+    }) && passed;
+
+    std::cout << "ANYNET_METADATA_BOUNDARY,cases=7,status=" << (passed ? "PASS" : "FAIL") << '\n';
+    return passed;
+}
+
+bool RunRuntimeBoundaryGate(inspire::InspireArchive& archive, const std::vector<inspirecv::Image>& images) {
+    if (images.empty()) {
+        return false;
+    }
+
+    inspire::AnyNetAdapter net("AnyNetInitializationGuard/runtime-boundary");
+    inspire::AnyTensorOutputs owned_outputs{{"stale", {1.0f}}};
+    std::string stale_name = "stale";
+    float stale_value = 1.0f;
+    inspire::AnyTensorViews views;
+    views.emplace_back(&stale_name, &stale_value, 1);
+    const bool unloaded_rejected =
+      net.Forward(owned_outputs) == InferenceWrapper::WrapperError && owned_outputs.empty() &&
+      net.ForwardViews(inspirecv::Image{}, views) == InferenceWrapper::WrapperError && views.empty();
+
+    inspire::InspireModel model;
+    double initialization_ms = 0.0;
+    if (!LoadInto(archive, "face_detect_160", net, model, initialization_ms)) {
+        return false;
+    }
+    const auto& input = net.getMInputTensorInfoList().front();
+    auto valid_image = images.front().Resize(input.image_info.width, input.image_info.height);
+    auto wrong_size = images.front().Resize(input.image_info.width - 1, input.image_info.height);
+    auto wrong_channel = inspirecv::Image::Create(input.image_info.width, input.image_info.height, 1);
+    const bool invalid_images_rejected =
+      net.ForwardViews(inspirecv::Image{}, views) == InferenceWrapper::WrapperError && views.empty() &&
+      net.ForwardViews(wrong_size, views) == InferenceWrapper::WrapperError && views.empty() &&
+      net.ForwardViews(wrong_channel, views) == InferenceWrapper::WrapperError && views.empty();
+
+    net.getMInputTensorInfoList().front().data = nullptr;
+    views.emplace_back(&stale_name, &stale_value, 1);
+    const bool null_data_rejected = net.ForwardViews(views) == InferenceWrapper::WrapperError && views.empty();
+    const bool valid_recovery = !valid_image.Empty() &&
+                                net.ForwardViews(valid_image, views) == InferenceWrapper::WrapperOk && !views.empty();
+
+    inspire::InspireModel corrupt_model;
+    bool failed_reload_rejected = false;
+    if (archive.LoadModel("face_detect_320", corrupt_model) == inspire::SARC_SUCCESS) {
+        std::vector<char> corrupt_buffer(64, 0);
+        corrupt_model.buffer = corrupt_buffer.data();
+        corrupt_model.bufferSize = corrupt_buffer.size();
+        corrupt_model.loadFilePath = 0;
+        const bool load_rejected = net.LoadData(corrupt_model, corrupt_model.modelType) == InferenceWrapper::WrapperError;
+        views.emplace_back(&stale_name, &stale_value, 1);
+        failed_reload_rejected = load_rejected &&
+                                 net.ForwardViews(valid_image, views) == InferenceWrapper::WrapperError && views.empty();
+    }
+
+    const bool passed = unloaded_rejected && invalid_images_rejected && null_data_rejected && valid_recovery &&
+                        failed_reload_rejected;
+    std::cout << "ANYNET_RUNTIME_BOUNDARY,cases=8,unloaded=" << (unloaded_rejected ? "PASS" : "FAIL")
+              << ",image-shape=" << (invalid_images_rejected ? "PASS" : "FAIL")
+              << ",null-data=" << (null_data_rejected ? "PASS" : "FAIL")
+              << ",recovery=" << (valid_recovery ? "PASS" : "FAIL")
+              << ",failed-reload=" << (failed_reload_rejected ? "PASS" : "FAIL")
+              << ",status=" << (passed ? "PASS" : "FAIL") << '\n';
+    return passed;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -378,6 +478,8 @@ int main(int argc, char** argv) {
     bool passed = LoadImages(test_root, images);
     if (passed) {
         auto& archive = inspire::Launch::GetInstance()->getMArchive();
+        passed = RunMetadataBoundaryGate(archive) && passed;
+        passed = RunRuntimeBoundaryGate(archive, images) && passed;
         if (mode == "single" || mode == "full") {
             passed = RunSingleGate(archive, images, iterations) && passed;
         }

@@ -167,6 +167,25 @@ bool TestTokenDeterminism() {
     }
 
     passed = passed && padding_zero;
+
+    inspire::ByteArray overwritten(17, 'x');
+    passed = passed && inspire::RunSerializeHyperFaceData(
+                         inspire::FaceObjectInternalToHyperFaceData(face, 0), overwritten) == HSUCCEED &&
+             overwritten.size() == sizeof(inspire::FaceTrackWrap) &&
+             std::memcmp(overwritten.data(), reference.data(), reference.size()) == 0;
+    inspire::FaceTrackWrap unchanged = {};
+    unchanged.trackId = 91;
+    passed = passed && inspire::RunDeserializeHyperFaceData(nullptr, sizeof(unchanged), unchanged) == HERR_SESS_FACE_DATA_ERROR &&
+             unchanged.trackId == 91;
+
+    auto oversized = MakeFaceObject();
+    oversized.high_result.lmk.assign(9, inspirecv::Point2f(777.0f, 888.0f));
+    oversized.high_result.lmk_quality = {0.25f};
+    oversized.landmark_smooth_aux_.assign(1, std::vector<inspirecv::Point2f>(3));
+    const auto bounded = inspire::FaceObjectInternalToHyperFaceData(oversized, 0);
+    passed = passed && bounded.keyPoints[4].x == 777.0f && bounded.quality[0] == 0.25f && bounded.quality[1] == -1.0f &&
+             bounded.densityLandmarkEnable == 0;
+
     std::cout << "TOKEN_DETERMINISM,size=" << reference.size() << ",tail_padding=" << (reference.size() - represented_end)
               << ",padding_zero=" << (padding_zero ? "PASS" : "FAIL") << ",digest=0x" << std::hex << digest << std::dec
               << ",status=" << (passed ? "PASS" : "FAIL") << '\n';

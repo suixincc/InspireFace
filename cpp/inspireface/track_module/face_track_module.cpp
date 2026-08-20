@@ -6,7 +6,10 @@
 #include "face_track_module.h"
 #include "log.h"
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
+#include <cstdint>
+#include <limits>
 #include <utility>
 #include "middleware/costman.h"
 #include "middleware/model_archive/inspire_archive.h"
@@ -230,8 +233,11 @@ bool FaceTrackModule::TrackFace(inspirecv::FrameProcess &image, FaceObjectIntern
             }
         }
         // Update face key points
-        face.SetLandmark(landmark_back, true, true, m_track_mode_smooth_ratio_, m_track_mode_num_smooth_cache_frame_,
-                         m_landmark_param_->num_of_landmark * 2);
+        if (!face.SetLandmark(landmark_back, true, true, m_track_mode_smooth_ratio_, m_track_mode_num_smooth_cache_frame_,
+                              m_landmark_param_->num_of_landmark * 2)) {
+            face.DisableTracking();
+            return false;
+        }
         // Get the smoothed landmark
         auto &landmark_smooth = face.landmark_smooth_aux_.back();
         // Update the face key points
@@ -469,6 +475,9 @@ int32_t FaceTrackModule::DetectFace(const inspirecv::Image &input, float scale) 
 int FaceTrackModule::Configuration(inspire::InspireArchive &archive, const std::string &expansion_path, bool enable_face_pose_and_quality) {
     // Initialize the detection model
     m_landmark_param_ = archive.GetLandmarkParam();
+    if (!m_landmark_param_) {
+        return HERR_ARCHIVE_LOAD_FAILURE;
+    }
     m_expansion_path_ = std::move(expansion_path);
     InspireModel detModel;
     auto scheme = ChoiceMultiLevelDetectModel(m_dynamic_detection_input_level_, track_preview_size_);
@@ -571,14 +580,21 @@ int FaceTrackModule::InitFacePoseAndQualityModel(InspireModel &model) {
 }
 
 void FaceTrackModule::SetDetectThreshold(float value) {
-    m_face_detector_->SetClsThreshold(value);
+    if (m_face_detector_ != nullptr && std::isfinite(value) && value >= 0.0f && value <= 1.0f) {
+        m_face_detector_->SetClsThreshold(value);
+    }
 }
 
 void FaceTrackModule::SetMinimumFacePxSize(float value) {
-    filter_minimum_face_px_size = value;
+    if (std::isfinite(value) && value >= 0.0f && value <= static_cast<float>(std::numeric_limits<int>::max())) {
+        filter_minimum_face_px_size = static_cast<int>(value);
+    }
 }
 
 void FaceTrackModule::SetTrackPreviewSize(int preview_size) {
+    if (preview_size == 0 || preview_size < -1) {
+        return;
+    }
     track_preview_size_ = preview_size;
     if (track_preview_size_ == -1) {
         track_preview_size_ = m_face_detector_->GetInputSize();
@@ -595,11 +611,15 @@ int32_t FaceTrackModule::GetTrackPreviewSize() const {
 std::string FaceTrackModule::ChoiceMultiLevelDetectModel(const int32_t pixel_size, int32_t &final_size) {
     const auto face_detect_pixel_list = Launch::GetInstance()->GetFaceDetectPixelList();
     const auto face_detect_model_list = Launch::GetInstance()->GetFaceDetectModelList();
-    const int32_t num_sizes = face_detect_pixel_list.size();
+    const size_t num_sizes = std::min(face_detect_pixel_list.size(), face_detect_model_list.size());
+    if (num_sizes == 0) {
+        final_size = -1;
+        return {};
+    }
     if (pixel_size == -1) {
         // Find index with value 320, use index 1 as fallback
-        int index = 1;
-        for (int i = 0; i < face_detect_pixel_list.size(); ++i) {
+        size_t index = num_sizes > 1 ? 1 : 0;
+        for (size_t i = 0; i < num_sizes; ++i) {
             if (face_detect_pixel_list[i] == 320) {
                 index = i;
                 break;
@@ -610,7 +630,7 @@ std::string FaceTrackModule::ChoiceMultiLevelDetectModel(const int32_t pixel_siz
     }
 
     // Check for exact match
-    for (int i = 0; i < num_sizes; ++i) {
+    for (size_t i = 0; i < num_sizes; ++i) {
         if (pixel_size == face_detect_pixel_list[i]) {
             final_size = face_detect_pixel_list[i];
             return face_detect_model_list[i];
@@ -620,10 +640,10 @@ std::string FaceTrackModule::ChoiceMultiLevelDetectModel(const int32_t pixel_siz
     // Find the closest match
     int32_t closest_size = face_detect_pixel_list[0];
     std::string closest_scheme = face_detect_model_list[0];
-    int32_t min_diff = std::abs(pixel_size - face_detect_pixel_list[0]);
+    int64_t min_diff = std::abs(static_cast<int64_t>(pixel_size) - face_detect_pixel_list[0]);
 
-    for (int i = 1; i < num_sizes; ++i) {
-        int32_t diff = std::abs(pixel_size - face_detect_pixel_list[i]);
+    for (size_t i = 1; i < num_sizes; ++i) {
+        const int64_t diff = std::abs(static_cast<int64_t>(pixel_size) - face_detect_pixel_list[i]);
         if (diff < min_diff) {
             min_diff = diff;
             closest_size = face_detect_pixel_list[i];
@@ -645,18 +665,27 @@ bool FaceTrackModule::IsDetectModeLandmark() const {
 }
 
 void FaceTrackModule::SetTrackModeSmoothRatio(float value) {
-    m_track_mode_smooth_ratio_ = value;
+    if (std::isfinite(value) && value >= 0.0f && value <= 1.0f) {
+        m_track_mode_smooth_ratio_ = value;
+    }
 }
 
 void FaceTrackModule::SetTrackModeNumSmoothCacheFrame(int value) {
-    m_track_mode_num_smooth_cache_frame_ = value;
+    if (value > 0) {
+        m_track_mode_num_smooth_cache_frame_ = value;
+    }
 }
 
 void FaceTrackModule::SetTrackModeDetectInterval(int value) {
-    detection_interval_ = value;
+    if (value > 0) {
+        detection_interval_ = value;
+    }
 }
 
 void FaceTrackModule::SetMultiscaleLandmarkLoop(int value) {
+    if (value <= 0) {
+        return;
+    }
     m_multiscale_landmark_loop_num_ = value;
     m_multiscale_landmark_scales_ = GenerateCropScales(m_landmark_crop_ratio_, m_multiscale_landmark_loop_num_);
 }
@@ -666,7 +695,9 @@ void FaceTrackModule::SetTrackLostRecoveryMode(bool value) {
 }
 
 void FaceTrackModule::SetLightTrackConfidenceThreshold(float value) {
-    m_light_track_confidence_threshold_ = value;
+    if (std::isfinite(value) && value >= 0.0f && value <= 1.0f) {
+        m_light_track_confidence_threshold_ = value;
+    }
 }
 
 void FaceTrackModule::ClearTrackingFace() {

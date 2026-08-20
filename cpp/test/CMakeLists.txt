@@ -142,6 +142,7 @@ if(ISF_ENFORCE_CPP_API_TEST_COVERAGE)
             GetInspireFaceVersionMajorStr GetInspireFaceVersionMinorStr
             GetInspireFaceVersionPatchStr GetInspireFaceExtendedInformation GetSDKInfo
             GetFullVersionInfo GetVersionMajorStr GetVersionMinorStr GetVersionPatchStr GetVersionString
+            GetComponentName GetComponentVersion GetComponentVersionsString GetDiagnosticInfo
             getInstance setLogLevel getLogLevel logAndroid logStandard
             Load Reload getMArchive isMLoad Unload
             SetRockchipDmaHeapPath GetRockchipDmaHeapPath

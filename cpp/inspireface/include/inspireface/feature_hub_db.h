@@ -227,6 +227,13 @@ public:
     int32_t GetFaceFeatureCount();
 
     /**
+     * @brief Retrieves the total number of facial features with explicit status.
+     * @param count Destination for the count. Reset to zero on failure.
+     * @return int32_t Status code of the operation.
+     */
+    int32_t GetFaceFeatureCount(int32_t& count);
+
+    /**
      * @brief Retrieves the confidence scores for the top k facial features.
      * @return A reference to the vector of confidence scores.
      */

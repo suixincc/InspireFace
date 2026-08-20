@@ -77,6 +77,9 @@ TEST_CASE("C++ FeatureHub CRUD search and caches remain coherent", "[cpp_api][co
     REQUIRE(cached_feature->data != nullptr);
     REQUIRE(cached_feature->dataSize == 512);
     CHECK(std::equal(first.begin(), first.end(), cached_feature->data));
+    CHECK(hub->GetFaceFeature(999) == HERR_FT_HUB_NOT_FOUND_FEATURE);
+    CHECK(cached_feature->data == nullptr);
+    CHECK(cached_feature->dataSize == 0);
 
     inspire::FaceSearchResult best = {};
     REQUIRE(hub->SearchFaceFeature(first, best, true) == HSUCCEED);
@@ -84,6 +87,9 @@ TEST_CASE("C++ FeatureHub CRUD search and caches remain coherent", "[cpp_api][co
     CHECK(best.similarity == Approx(1.0).margin(1e-6));
     CHECK(best.feature == first);
     CHECK(hub->GetSearchFaceFeatureCache() == first);
+    CHECK(hub->SearchFaceFeature(std::vector<float>(511, 0.0f), best, true) == HERR_FT_HUB_INVALID_FEATURE);
+    CHECK(cached_feature->data == nullptr);
+    CHECK(cached_feature->dataSize == 0);
 
     std::vector<inspire::FaceSearchResult> top_k;
     REQUIRE(hub->SearchFaceFeatureTopK(first, top_k, 5, true) == HSUCCEED);
@@ -123,6 +129,9 @@ TEST_CASE("C++ FeatureHub rejects malformed inputs and clears outputs", "[cpp_ap
     invalid_configuration = MemoryConfiguration();
     invalid_configuration.enable_persistence = true;
     invalid_configuration.persistence_db_path.clear();
+    CHECK(hub->EnableHub(invalid_configuration) == HERR_INVALID_PARAM);
+    invalid_configuration = MemoryConfiguration();
+    invalid_configuration.recognition_threshold = std::numeric_limits<float>::quiet_NaN();
     CHECK(hub->EnableHub(invalid_configuration) == HERR_INVALID_PARAM);
 
     REQUIRE(hub->EnableHub(MemoryConfiguration()) == HSUCCEED);

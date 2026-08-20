@@ -126,6 +126,8 @@ typedef struct HFImageData {
  * @brief Create a data buffer stream instantiation object.
  *
  * This function is used to create an instance of a data buffer stream with the given image data.
+ * The stream is a non-owning view: the caller must keep @p data->data alive and unchanged until the stream is released
+ * or a different buffer is installed with HFImageStreamSetBuffer().
  *
  * @param data Pointer to the image buffer data structure.
  * @param handle Pointer to the stream handle that will be returned.
@@ -237,6 +239,8 @@ HYPER_CAPI_EXPORT extern HResult HFReleaseImageBitmap(HFImageBitmap handle);
 
 /**
  * @brief Create a image stream from image bitmap.
+ *
+ * The created stream owns a snapshot of the bitmap pixels and remains valid if the source bitmap is modified or released.
  *
  * @param handle Pointer to the image bitmap handle.
  * @param rotation The rotation angle of the image.
@@ -382,6 +386,14 @@ HYPER_CAPI_EXPORT extern HResult HFSetExpansiveHardwareRockchipDmaHeapPath(HPath
  * @return HResult indicating the success or failure of the operation.
  * */
 HYPER_CAPI_EXPORT extern HResult HFQueryExpansiveHardwareRockchipDmaHeapPath(HString path);
+
+/**
+ * @brief Query the Rockchip DMA heap path into a bounded caller buffer.
+ * @param path Pointer to a writable character buffer.
+ * @param bufferSize Size of the buffer in bytes, including space for the null terminator.
+ * @return HResult indicating success, invalid parameters, or an insufficient buffer.
+ */
+HYPER_CAPI_EXPORT extern HResult HFQueryExpansiveHardwareRockchipDmaHeapPathWithSize(HString path, HInt32 bufferSize);
 
 /**
  * @brief Enum for image processing backend.
@@ -701,6 +713,15 @@ HYPER_CAPI_EXPORT extern HResult HFSessionSetTrackModeNumSmoothCacheFrame(HFSess
  * @return HResult indicating the success or failure of the operation.
  */
 HYPER_CAPI_EXPORT extern HResult HFSessionSetTrackModeDetectInterval(HFSession session, HInt32 num);
+
+/**
+ * @brief Set the number of landmark refinement passes. The default value is 1.
+ *
+ * @param session Handle to the session.
+ * @param num Number of refinement passes. Must be greater than zero.
+ * @return HResult indicating the success or failure of the operation.
+ */
+HYPER_CAPI_EXPORT extern HResult HFSessionSetLandmarkAugmentationNum(HFSession session, HInt32 num);
 
 /**
  * @brief Run face tracking in the session.
@@ -1362,6 +1383,74 @@ typedef struct HFInspireFaceVersion {
  * @return HResult indicating the success or failure of the operation.
  */
 HYPER_CAPI_EXPORT extern HResult HFQueryInspireFaceVersion(PHFInspireFaceVersion version);
+
+/**
+ * @brief Components whose build-time versions can be queried.
+ */
+typedef enum HFComponentType {
+    HF_COMPONENT_MNN = 0,
+    HF_COMPONENT_INSPIRECV,
+    HF_COMPONENT_EIGEN,
+    HF_COMPONENT_SQLITE,
+    HF_COMPONENT_SQLITE_VEC,
+    HF_COMPONENT_NLOHMANN_JSON,
+    HF_COMPONENT_OPENCV,
+    HF_COMPONENT_TENSORRT,
+    HF_COMPONENT_CUDA,
+    HF_COMPONENT_RKNN,
+    HF_COMPONENT_RGA,
+    HF_COMPONENT_COREML,
+    HF_COMPONENT_COUNT,
+} HFComponentType;
+
+/**
+ * @brief Availability of a component version in the current SDK binary.
+ */
+typedef enum HFComponentVersionState {
+    HF_COMPONENT_VERSION_DISABLED = 0,  ///< The component is not compiled into or linked by this SDK binary.
+    HF_COMPONENT_VERSION_KNOWN = 1,     ///< The component is present and its version is available.
+    HF_COMPONENT_VERSION_UNKNOWN = 2,   ///< The component is present, but its version cannot be determined.
+} HFComponentVersionState;
+
+/**
+ * @brief Structured component version information.
+ *
+ * The numeric fields are meaningful only when state is HF_COMPONENT_VERSION_KNOWN.
+ * They are zero for disabled components and components whose version is unknown.
+ */
+typedef struct HFComponentVersion {
+    HInt32 major;
+    HInt32 minor;
+    HInt32 patch;
+    HFComponentVersionState state;
+} HFComponentVersion, *PHFComponentVersion;
+
+/**
+ * @brief Query one component version without launching the SDK.
+ */
+HYPER_CAPI_EXPORT extern HResult HFQueryInspireFaceComponentVersion(HFComponentType component, PHFComponentVersion version);
+
+/**
+ * @brief Query all component versions as a stable semicolon-separated string.
+ *
+ * The output uses key=value pairs. Known versions use x.y.z, components that
+ * are not present use "disabled", and present components without an available
+ * version use "unknown". Pass buffer=NULL and bufferSize=0 to query the required
+ * size, including the null terminator.
+ *
+ * @param buffer Destination buffer, or NULL for a size query.
+ * @param bufferSize Destination capacity in bytes, including the null terminator.
+ * @param requiredSize Receives the required capacity in bytes.
+ */
+HYPER_CAPI_EXPORT extern HResult HFQueryInspireFaceComponentVersions(HString buffer, HInt32 bufferSize, HPInt32 requiredSize);
+
+/**
+ * @brief Query complete SDK build and component diagnostic information.
+ *
+ * Pass buffer=NULL and bufferSize=0 to query the required size, including the
+ * null terminator. The returned text is available before launching the SDK.
+ */
+HYPER_CAPI_EXPORT extern HResult HFQueryInspireFaceDiagnosticInformation(HString buffer, HInt32 bufferSize, HPInt32 requiredSize);
 
 /**
  * @brief Struct representing the extended information of the InspireFace library.

@@ -1,6 +1,9 @@
 #include <array>
 #include <cmath>
+#include <cstdint>
+#include <limits>
 #include <type_traits>
+#include <vector>
 
 #include <inspireface/include/inspireface/inspireface.hpp>
 
@@ -108,4 +111,99 @@ TEST_CASE("C++ FrameProcess raw buffers and mutable preprocessing settings remai
         CHECK(std::isfinite(affine[index]));
         CHECK(std::isfinite(rotation_affine[index]));
     }
+}
+
+TEST_CASE("C++ FrameProcess rejects incomplete and arithmetically unsafe inputs", "[cpp_api][contract][frame_process][boundary]") {
+    inspirecv::FrameProcess empty;
+    CHECK(empty.GetWidth() == 0);
+    CHECK(empty.GetHeight() == 0);
+    CHECK(empty.ExecutePreviewImageProcessing(false).Empty());
+    CHECK(empty.ExecuteImageScaleProcessing(1.0f, true).Empty());
+
+    auto identity = inspirecv::TransformMatrix::Create();
+    CHECK(empty.ExecuteImageAffineProcessing(identity, 8, 8).Empty());
+    const auto empty_affine = empty.GetAffineMatrix();
+    const auto empty_rotation = empty.GetRotationModeAffineMatrix();
+    for (size_t index = 0; index < 6; ++index) {
+        CHECK(std::isfinite(empty_affine[index]));
+        CHECK(std::isfinite(empty_rotation[index]));
+    }
+
+    uint8_t pixel = 0;
+    auto oversized = inspirecv::FrameProcess::Create(
+      &pixel, std::numeric_limits<int>::max(), 2, inspirecv::GRAY, inspirecv::ROTATION_0);
+    CHECK(oversized.ExecuteImageScaleProcessing(1.0f, false).Empty());
+
+    std::vector<uint8_t> odd_yuv(7 * 8 * 3 / 2, 128);
+    auto odd_planar = inspirecv::FrameProcess::Create(
+      odd_yuv.data(), 8, 7, inspirecv::NV21, inspirecv::ROTATION_0);
+    CHECK(odd_planar.ExecuteImageScaleProcessing(1.0f, false).Empty());
+}
+
+TEST_CASE("C++ FrameProcess invalid settings preserve the last valid configuration", "[cpp_api][contract][frame_process][boundary]") {
+    const auto image = inspirecv::Image::Create(GET_DATA("data/bulk/r0.jpg"));
+    REQUIRE(!image.Empty());
+    auto process = inspirecv::FrameProcess::Create(image, inspirecv::BGR, inspirecv::ROTATION_90);
+    process.SetPreviewScale(0.5f);
+
+    const float valid_scale = process.GetPreviewScale();
+    const auto valid_rotation = process.getRotationMode();
+    process.SetPreviewScale(0.0f);
+    process.SetPreviewScale(-1.0f);
+    process.SetPreviewScale(std::numeric_limits<float>::quiet_NaN());
+    process.SetPreviewScale(std::numeric_limits<float>::infinity());
+    process.SetPreviewSize(0);
+    process.SetPreviewSize(-1);
+    process.SetRotationMode(static_cast<inspirecv::ROTATION_MODE>(99));
+    process.SetDataFormat(static_cast<inspirecv::DATA_FORMAT>(99));
+    process.SetDestFormat(static_cast<inspirecv::DATA_FORMAT>(99));
+    CHECK(process.GetPreviewScale() == Approx(valid_scale));
+    CHECK(process.getRotationMode() == valid_rotation);
+
+    const auto after_invalid_settings = process.ExecutePreviewImageProcessing(true);
+    REQUIRE(!after_invalid_settings.Empty());
+    CHECK(after_invalid_settings.Channels() == 3);
+
+    CHECK(process.ExecuteImageScaleProcessing(std::numeric_limits<float>::denorm_min(), false).Empty());
+    CHECK(process.ExecuteImageScaleProcessing(std::numeric_limits<float>::max(), false).Empty());
+    CHECK(process.ExecuteImageScaleProcessing(std::numeric_limits<float>::quiet_NaN(), false).Empty());
+    CHECK(process.ExecuteImageScaleProcessing(-1.0f, false).Empty());
+
+    process.SetDataBuffer(nullptr, image.Height(), image.Width());
+    CHECK(process.GetWidth() == 0);
+    CHECK(process.GetHeight() == 0);
+    CHECK(process.ExecutePreviewImageProcessing(true).Empty());
+}
+
+TEST_CASE("C++ FrameProcess rejects singular transforms and honors packed destination formats",
+          "[cpp_api][contract][frame_process][boundary]") {
+    const auto image = inspirecv::Image::Create(GET_DATA("data/bulk/kun.jpg"));
+    REQUIRE(!image.Empty());
+    auto process = inspirecv::FrameProcess::Create(image, inspirecv::BGR, inspirecv::ROTATION_0);
+
+    auto singular = inspirecv::TransformMatrix::Create();
+    for (size_t index = 0; index < 6; ++index) {
+        singular[index] = 0.0f;
+    }
+    CHECK(process.ExecuteImageAffineProcessing(singular, 32, 32).Empty());
+
+    auto non_finite = inspirecv::TransformMatrix::Create();
+    non_finite[0] = std::numeric_limits<float>::quiet_NaN();
+    CHECK(process.ExecuteImageAffineProcessing(non_finite, 32, 32).Empty());
+    auto identity = inspirecv::TransformMatrix::Create();
+    CHECK(process.ExecuteImageAffineProcessing(identity, 0, 32).Empty());
+    CHECK(process.ExecuteImageAffineProcessing(identity, std::numeric_limits<int>::max(), 2).Empty());
+
+    process.SetDestFormat(inspirecv::GRAY);
+    const auto gray = process.ExecuteImageScaleProcessing(0.25f, false);
+    REQUIRE(!gray.Empty());
+    CHECK(gray.Channels() == 1);
+
+    process.SetDestFormat(inspirecv::RGBA);
+    const auto rgba = process.ExecuteImageScaleProcessing(0.25f, false);
+    REQUIRE(!rgba.Empty());
+    CHECK(rgba.Channels() == 4);
+
+    process.SetDestFormat(inspirecv::NV21);
+    CHECK(process.ExecuteImageScaleProcessing(0.25f, false).Empty());
 }

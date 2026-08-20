@@ -20,6 +20,18 @@ public:
 
 }  // namespace
 
+TEST_CASE("C++ component versions are available before launch", "[cpp_api][contract][lifecycle][metadata]") {
+    CppLaunchReset reset;
+    const auto launch = inspire::Launch::GetInstance();
+    REQUIRE_FALSE(launch->isMLoad());
+
+    const auto mnn_version = inspire::GetComponentVersion(inspire::ComponentType::MNN);
+    CHECK(mnn_version.IsVersionKnown());
+    CHECK(inspire::GetComponentVersionsString().find("inspireface=") == 0);
+    CHECK_FALSE(inspire::GetDiagnosticInfo().empty());
+    CHECK_FALSE(launch->isMLoad());
+}
+
 TEST_CASE("C++ Launch rejects unavailable archives without changing state", "[cpp_api][contract][lifecycle][boundary]") {
     CppLaunchReset reset;
     const auto launch = inspire::Launch::GetInstance();

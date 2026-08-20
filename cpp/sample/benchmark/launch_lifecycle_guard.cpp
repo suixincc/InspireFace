@@ -205,6 +205,41 @@ bool RunSuite(const char* phase, const std::string& test_root, int iterations, s
     return passed;
 }
 
+bool TestLandmarkSwitchIsolation(const std::string& pack_path, const std::string& test_root) {
+    inspire::InspireArchive original(pack_path);
+    if (original.QueryStatus() != inspire::SARC_SUCCESS || !original.GetLandmarkParam()) {
+        return false;
+    }
+    const auto original_parameter = original.GetLandmarkParam();
+    inspire::InspireArchive replacement(original);
+    const bool archive_isolated = replacement.SwitchLandmarkEngine("landmark") && replacement.GetLandmarkParam() &&
+                                  replacement.GetLandmarkParam() != original_parameter && original.GetLandmarkParam() == original_parameter &&
+                                  replacement.GetLandmarkParam()->num_of_landmark == original_parameter->num_of_landmark &&
+                                  replacement.GetLandmarkParam()->semantic_index.left_eye_center ==
+                                    original_parameter->semantic_index.left_eye_center;
+
+    SessionHandle old_session;
+    CaseResult before;
+    CaseResult after;
+    CaseResult fresh;
+    const ImageCase& image_case = kImageCases[1];
+    bool inference_isolated = CreateSession(old_session) && RunCase(old_session.value, image_case, test_root, 3, before);
+    const auto switch_begin = Clock::now();
+    const HResult switch_status = HFSwitchLandmarkEngine(HF_LANDMARK_HYPLMV2_0_25);
+    const auto switch_end = Clock::now();
+    inference_isolated = inference_isolated && switch_status == HSUCCEED && RunCase(old_session.value, image_case, test_root, 3, after);
+    SessionHandle fresh_session;
+    inference_isolated = inference_isolated && CreateSession(fresh_session) && RunCase(fresh_session.value, image_case, test_root, 3, fresh) &&
+                         before.faces == after.faces && before.faces == fresh.faces && before.digest == after.digest && before.digest == fresh.digest;
+    const double switch_us = std::chrono::duration<double, std::micro>(switch_end - switch_begin).count();
+    const bool passed = archive_isolated && inference_isolated;
+    std::cout << std::fixed << std::setprecision(3) << "LANDMARK_SWITCH_ISOLATION,archive=" << (archive_isolated ? "PASS" : "FAIL")
+              << ",old_session_exact=" << (before.digest == after.digest ? "PASS" : "FAIL")
+              << ",new_session_exact=" << (before.digest == fresh.digest ? "PASS" : "FAIL") << ",switch_us=" << switch_us
+              << ",status=" << (passed ? "PASS" : "FAIL") << '\n';
+    return passed;
+}
+
 bool ResultsMatch(const std::vector<CaseResult>& baseline, const std::vector<CaseResult>& candidate, const char* phase) {
     bool exact = baseline.size() == candidate.size();
     bool latency = exact;
@@ -371,6 +406,7 @@ int main(int argc, char** argv) {
     }
 
     bool passed = unloaded_guard;
+    passed = TestLandmarkSwitchIsolation(pack_path, test_root) && passed;
     std::vector<CaseResult> baseline;
     passed = RunSuite("baseline", test_root, image_iterations, baseline) && passed;
     const auto expected_pixels = INSPIREFACE_CONTEXT->GetFaceDetectPixelList();

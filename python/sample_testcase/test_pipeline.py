@@ -3,6 +3,8 @@
 import unittest
 
 import inspireface as ifac
+from inspireface.modules.core import HFFaceMaskConfidence
+from inspireface.modules.exception import ProcessingError
 from inspireface.param import (
     HF_ENABLE_FACE_ATTRIBUTE,
     HF_ENABLE_FACE_EMOTION,
@@ -26,6 +28,31 @@ def pipeline_fixture(testcase, relative_path, parameter):
 
 
 class FacePipelineCase(NativeResourceCaseMixin, unittest.TestCase):
+    def test_pipeline_result_count_mismatch_is_rejected(self):
+        result = HFFaceMaskConfidence()
+        result.num = 2
+        with self.assertRaises(ProcessingError):
+            ifac.InspireFaceSession._validate_pipeline_result(
+                0,
+                result,
+                ("confidence",),
+                1,
+                "Synthetic mask result",
+            )
+        result.num = 1
+        with self.assertRaises(ProcessingError):
+            ifac.InspireFaceSession._validate_pipeline_result(
+                0,
+                result,
+                ("confidence",),
+                1,
+                "Synthetic mask result",
+            )
+
+    def test_empty_pipeline_is_a_no_op(self):
+        with managed_session(0) as session:
+            self.assertEqual(session.face_pipeline(object(), [], 0), [])
+
     def test_emotion_classification_matches_cpp_cases(self):
         cases = (
             ("emotion/anger.png", 6),

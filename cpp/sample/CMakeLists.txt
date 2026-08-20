@@ -105,6 +105,19 @@ set_target_properties(SessionInitializationGuardSample PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/sample/benchmark/"
 )
 
+if(NOT ISF_BUILD_SHARED_LIBS)
+        add_executable(ArchiveConsistencyGuardSample
+                benchmark/archive_consistency_guard.cpp
+                ../inspireface/middleware/model_archive/core_archive/microtar/microtar.c)
+        target_link_libraries(ArchiveConsistencyGuardSample InspireFace ${ext})
+        set_target_properties(ArchiveConsistencyGuardSample PROPERTIES
+                RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/sample/benchmark/"
+        )
+        if(BUILD_TESTING)
+                add_test(NAME InspireFace.Archive.Consistency COMMAND ArchiveConsistencyGuardSample)
+        endif()
+endif()
+
 # This guard intentionally inspects internal MNN tensors and cache counters.
 # Keep it on the static-library sample build instead of exporting test-only
 # implementation symbols from the shared SDK.
@@ -144,15 +157,102 @@ set_target_properties(OutputTensorInfoGuardSample PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/sample/benchmark/"
 )
 
-add_executable(LaunchLifecycleGuardSample benchmark/launch_lifecycle_guard.cpp)
-target_link_libraries(LaunchLifecycleGuardSample InspireFace ${ext})
-set_target_properties(LaunchLifecycleGuardSample PROPERTIES
+add_executable(RknnOutputLifecycleGuardSample benchmark/rknn_output_lifecycle_guard.cpp)
+target_link_libraries(RknnOutputLifecycleGuardSample InspireFace ${ext})
+set_target_properties(RknnOutputLifecycleGuardSample PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/sample/benchmark/"
 )
+if(BUILD_TESTING)
+        add_test(NAME InspireFace.RKNN.OutputLifecycle COMMAND RknnOutputLifecycleGuardSample)
+endif()
+
+# Exercise the production RKNPU2 adapter against a deterministic host runtime.
+# A real RKNN build already compiles this implementation and links the vendor
+# runtime, so the host mock is only needed when RKNN itself is disabled.
+if(NOT ISF_ENABLE_RKNN)
+        add_executable(Rknn1AdapterContractGuardSample
+                benchmark/rknn1_adapter_contract_guard.cpp
+                ../inspireface/middleware/inference_wrapper/inference_wrapper_rknn_adapter.cpp)
+        target_compile_definitions(Rknn1AdapterContractGuardSample PRIVATE INFERENCE_WRAPPER_ENABLE_RKNN=1)
+        target_include_directories(Rknn1AdapterContractGuardSample BEFORE PRIVATE
+                ${ISF_THIRD_PARTY_DIR}/inspireface-precompile-lite/rknn/rknpu1/runtime/RV1109RV1126/Linux/librknn_api/include)
+        target_link_libraries(Rknn1AdapterContractGuardSample InspireFace ${ext})
+        set_target_properties(Rknn1AdapterContractGuardSample PROPERTIES
+                RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/sample/benchmark/"
+        )
+        if(BUILD_TESTING)
+                add_test(NAME InspireFace.RKNN1.AdapterContract COMMAND Rknn1AdapterContractGuardSample)
+        endif()
+
+        add_executable(Rknn2AdapterContractGuardSample
+                benchmark/rknn2_adapter_contract_guard.cpp
+                ../inspireface/middleware/inference_wrapper/inference_wrapper_rknn_adapter_nano.cpp)
+        target_compile_definitions(Rknn2AdapterContractGuardSample PRIVATE INFERENCE_WRAPPER_ENABLE_RKNN2=1)
+        target_include_directories(Rknn2AdapterContractGuardSample BEFORE PRIVATE
+                ${ISF_THIRD_PARTY_DIR}/inspireface-precompile-lite/rknn/rknpu2/runtime/Linux/librknn_api/include)
+        target_link_libraries(Rknn2AdapterContractGuardSample InspireFace ${ext})
+        set_target_properties(Rknn2AdapterContractGuardSample PROPERTIES
+                RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/sample/benchmark/"
+        )
+        if(BUILD_TESTING)
+                add_test(NAME InspireFace.RKNN2.AdapterContract COMMAND Rknn2AdapterContractGuardSample)
+        endif()
+endif()
+
+# Compile the production TensorRT adapter against a deterministic CPU-only
+# CUDA/TensorRT double. This keeps ownership and error-path coverage available
+# on CI hosts that do not have an NVIDIA driver or TensorRT installation.
+add_executable(TensorRTLifecycleGuardSample
+        benchmark/tensorrt_lifecycle_guard.cpp
+        ../inspireface/middleware/inference_wrapper/tensorrt/tensorrt_adapter.cpp)
+target_compile_definitions(TensorRTLifecycleGuardSample PRIVATE ISF_ENABLE_TENSORRT=1)
+target_include_directories(TensorRTLifecycleGuardSample BEFORE PRIVATE benchmark/mock_tensorrt)
+target_link_libraries(TensorRTLifecycleGuardSample InspireFace ${ext})
+set_target_properties(TensorRTLifecycleGuardSample PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/sample/benchmark/"
+)
+if(BUILD_TESTING)
+        add_test(NAME InspireFace.TensorRT.Lifecycle COMMAND TensorRTLifecycleGuardSample)
+endif()
+
+add_executable(JniDataLifecycleGuardSample benchmark/jni_data_lifecycle_guard.cpp)
+target_link_libraries(JniDataLifecycleGuardSample InspireFace ${ext})
+set_target_properties(JniDataLifecycleGuardSample PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/sample/benchmark/"
+)
+if(BUILD_TESTING)
+        add_test(NAME InspireFace.JNI.DataLifecycle COMMAND JniDataLifecycleGuardSample)
+endif()
+
+add_executable(FrameProcessContractGuardSample benchmark/frame_process_contract_guard.cpp)
+target_link_libraries(FrameProcessContractGuardSample InspireFace ${ext})
+set_target_properties(FrameProcessContractGuardSample PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/sample/benchmark/"
+)
+if(BUILD_TESTING)
+        add_test(NAME InspireFace.FrameProcess.Contract COMMAND FrameProcessContractGuardSample)
+endif()
 
 # This guard exercises AnyNetAdapter and archive internals that are intentionally
 # not exported by the shared SDK. Keep it on the static-library sample build.
 if(NOT ISF_BUILD_SHARED_LIBS)
+        # LandmarkParam and LaunchLifecycle also exercise inline archive/YAML
+        # implementation details that are hidden by the shared-library ABI.
+        add_executable(LandmarkStateGuardSample benchmark/landmark_state_guard.cpp)
+        target_link_libraries(LandmarkStateGuardSample InspireFace ${ext})
+        set_target_properties(LandmarkStateGuardSample PROPERTIES
+                RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/sample/benchmark/"
+        )
+        if(BUILD_TESTING)
+                add_test(NAME InspireFace.Landmark.State COMMAND LandmarkStateGuardSample)
+        endif()
+
+        add_executable(LaunchLifecycleGuardSample benchmark/launch_lifecycle_guard.cpp)
+        target_link_libraries(LaunchLifecycleGuardSample InspireFace ${ext})
+        set_target_properties(LaunchLifecycleGuardSample PROPERTIES
+                RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/sample/benchmark/"
+        )
+
         add_executable(AnyNetInitializationGuardSample benchmark/any_net_initialization_guard.cpp)
         target_link_libraries(AnyNetInitializationGuardSample InspireFace ${ext})
         set_target_properties(AnyNetInitializationGuardSample PROPERTIES

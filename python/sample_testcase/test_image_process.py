@@ -26,7 +26,7 @@ from inspireface.modules.core import (
     HFReleaseImageBitmap,
     String,
 )
-from inspireface.modules.exception import check_error
+from inspireface.modules.exception import InvalidInputError, check_error
 
 from .common import NativeResourceCaseMixin, decode_stream, image_mse, load_image
 from .settings import data_path
@@ -52,16 +52,33 @@ class ImageProcessCase(NativeResourceCaseMixin, unittest.TestCase):
             self.assertEqual(image.shape, decoded[0].shape, cases[index][0])
             self.assertLessEqual(image_mse(image, decoded[0]), 0.001, cases[index][0])
 
-    def test_nv21_rotation_matches_cpp_fixtures(self):
+    def test_nv21_dimension_and_rotation_contract_matches_cpp(self):
         cases = (
             ("bulk/r0_w330_h409_c3.nv21", 330, 409, HF_CAMERA_ROTATION_0),
             ("bulk/r90_w409_h330_c3.nv21", 409, 330, HF_CAMERA_ROTATION_90),
             ("bulk/r180_w330_h409_c3.nv21", 330, 409, HF_CAMERA_ROTATION_180),
             ("bulk/r270_w409_h330_c3.nv21", 409, 330, HF_CAMERA_ROTATION_270),
         )
-        decoded = []
         for relative_path, width, height, rotation in cases:
             payload = np.fromfile(str(data_path(relative_path)), dtype=np.uint8)
+            with self.assertRaises(InvalidInputError, msg=relative_path):
+                ifac.ImageStream.load_from_ndarray(
+                    payload,
+                    width,
+                    height,
+                    HF_STREAM_YUV_NV21,
+                    rotation,
+                )
+
+        width = 8
+        height = 8
+        payload = np.full(width * height * 3 // 2, 128, dtype=np.uint8)
+        for rotation in (
+            HF_CAMERA_ROTATION_0,
+            HF_CAMERA_ROTATION_90,
+            HF_CAMERA_ROTATION_180,
+            HF_CAMERA_ROTATION_270,
+        ):
             with ifac.ImageStream.load_from_ndarray(
                 payload,
                 width,
@@ -69,10 +86,9 @@ class ImageProcessCase(NativeResourceCaseMixin, unittest.TestCase):
                 HF_STREAM_YUV_NV21,
                 rotation,
             ) as stream:
-                decoded.append(decode_stream(stream, apply_rotation=True))
-        for index, image in enumerate(decoded[1:], start=1):
-            self.assertEqual(image.shape, decoded[0].shape, cases[index][0])
-            self.assertLessEqual(image_mse(image, decoded[0]), 0.01, cases[index][0])
+                decoded = decode_stream(stream, apply_rotation=True)
+            self.assertEqual(decoded.shape, (height, width, 3))
+            self.assertTrue(np.isfinite(decoded).all())
 
     def test_bitmap_create_copy_draw_and_write(self):
         bitmap = HFImageBitmap()

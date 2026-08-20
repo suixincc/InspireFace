@@ -1,4 +1,6 @@
+#include <array>
 #include <cmath>
+#include <limits>
 #include <type_traits>
 #include <vector>
 
@@ -20,6 +22,15 @@ TEST_CASE("C++ Session reports an unconfigured default instance without leaking 
     auto process = inspirecv::FrameProcess::Create(image, inspirecv::BGR, inspirecv::ROTATION_0);
 
     Session session;
+    session.ClearTrackingFace();
+    session.SetTrackLostRecoveryMode(true);
+    session.SetLightTrackConfidenceThreshold(std::numeric_limits<float>::quiet_NaN());
+    session.SetTrackPreviewSize(0);
+    session.SetFilterMinimumFacePixelSize(-1);
+    session.SetFaceDetectThreshold(std::numeric_limits<float>::infinity());
+    session.SetTrackModeSmoothRatio(0.25f);
+    session.SetTrackModeNumSmoothCacheFrame(0);
+    session.SetTrackModeDetectInterval(0);
     std::vector<FaceTrackWrap> faces(1);
     CHECK(session.FaceDetectAndTrack(process, faces) == HERR_SESS_INVALID_RESOURCE);
     CHECK(faces.empty());
@@ -38,6 +49,23 @@ TEST_CASE("C++ Session reports an unconfigured default instance without leaking 
     CHECK(session.GetFaceInteractionAction().empty());
     CHECK(session.GetFaceAttributeResult().empty());
     CHECK(session.GetFaceEmotionResult().empty());
+}
+
+TEST_CASE("C++ Session creation rejects invalid configuration transactionally", "[cpp_api][contract][session][boundary]") {
+    const auto image = inspirecv::Image::Create(GET_DATA("data/bulk/kun.jpg"));
+    REQUIRE(!image.Empty());
+    auto process = inspirecv::FrameProcess::Create(image, inspirecv::BGR, inspirecv::ROTATION_0);
+    const CustomPipelineParameter parameter;
+
+    std::array<Session, 3> invalid_sessions = {
+      Session::Create(static_cast<inspire::DetectModuleMode>(99), 1, parameter),
+      Session::Create(inspire::DETECT_MODE_ALWAYS_DETECT, 0, parameter),
+      Session::Create(inspire::DETECT_MODE_TRACK_BY_DETECT, 1, parameter, -1, 0)};
+    for (auto& session : invalid_sessions) {
+        std::vector<FaceTrackWrap> faces(1);
+        CHECK(session.FaceDetectAndTrack(process, faces) == HERR_INVALID_PARAM);
+        CHECK(faces.empty());
+    }
 }
 
 TEST_CASE("C++ Session move ownership retains detection and landmark behavior", "[cpp_api][contract][session][face_track]") {

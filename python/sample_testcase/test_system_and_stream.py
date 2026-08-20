@@ -5,6 +5,7 @@ import gc
 import os
 import subprocess
 import sys
+import time
 import unittest
 import weakref
 
@@ -18,6 +19,7 @@ from inspireface.param import (
     HF_DETECT_MODE_ALWAYS_DETECT,
     HF_ENABLE_NONE,
     HF_STREAM_BGR,
+    HF_STREAM_I420,
 )
 
 from .common import (
@@ -38,11 +40,67 @@ class SystemCase(NativeResourceCaseMixin, unittest.TestCase):
         self.assertEqual(len(parts), 3)
         self.assertTrue(all(part.isdigit() for part in parts))
 
+        expected_components = (
+            "inspireface",
+            "mnn",
+            "inspirecv",
+            "eigen",
+            "sqlite",
+            "sqlite_vec",
+            "nlohmann_json",
+            "opencv",
+            "tensorrt",
+            "cuda",
+            "rknn",
+            "rga",
+            "coreml",
+        )
+        components = ifac.component_versions()
+        self.assertEqual(tuple(components), expected_components)
+        self.assertEqual(components, ifac.component_versions())
+        for name in expected_components:
+            component = components[name]
+            self.assertIn(component["state"], {"known", "unknown", "disabled"})
+            if component["state"] == "known":
+                self.assertEqual(
+                    component["version"],
+                    f'{component["major"]}.{component["minor"]}.{component["patch"]}',
+                )
+            else:
+                self.assertIsNone(component["version"])
+                self.assertIsNone(component["major"])
+                self.assertIsNone(component["minor"])
+                self.assertIsNone(component["patch"])
+        for name in expected_components[:7]:
+            self.assertEqual(components[name]["state"], "known")
+
+        diagnostic = ifac.diagnostic_info()
+        self.assertTrue(diagnostic.startswith("InspireFace SDK "))
+        self.assertIn("\nComponents: inspireface=", diagnostic)
+        rendered = dict(
+            item.split("=", 1)
+            for item in diagnostic.rsplit("\nComponents: ", 1)[1].split(";")
+        )
+        self.assertEqual(tuple(rendered), expected_components)
+        for name, component in components.items():
+            expected = component["version"] or component["state"]
+            self.assertEqual(rendered[name], expected)
+
+        started = time.perf_counter()
+        for _ in range(200):
+            self.assertEqual(ifac.diagnostic_info(), diagnostic)
+        self.assertLess(time.perf_counter() - started, 2.0)
+
     def test_global_lifecycle_in_isolated_process(self):
         source = """
 import os
 import inspireface as ifac
 model = os.environ['INSPIREFACE_SYSTEM_MODEL']
+assert not ifac.query_launch_status()
+components = ifac.component_versions()
+assert components['inspireface']['state'] == 'known'
+assert components['mnn']['state'] == 'known'
+assert '\\nComponents: inspireface=' in ifac.diagnostic_info()
 assert not ifac.query_launch_status()
 assert ifac.launch(resource_path=model)
 assert ifac.query_launch_status()
@@ -82,6 +140,16 @@ assert not ifac.query_launch_status()
             session._sess = None
         self.assertEqual(unreleased_session_count(), baseline)
 
+    def test_session_context_and_temporary_streams_release_deterministically(self):
+        baseline_sessions = unreleased_session_count()
+        image = load_image("bulk/kun.jpg")
+        with ifac.InspireFaceSession(HF_ENABLE_NONE) as session:
+            baseline_streams = unreleased_stream_count()
+            for _ in range(4):
+                self.assertGreater(len(session.face_detection(image)), 0)
+                self.assertEqual(unreleased_stream_count(), baseline_streams)
+        self.assertEqual(unreleased_session_count(), baseline_sessions)
+
     def test_stream_resource_registry(self):
         image = load_image("bulk/pedestrian.png")
         baseline = unreleased_stream_count()
@@ -102,13 +170,15 @@ assert not ifac.query_launch_status()
             session.set_track_mode_smooth_ratio(0.025)
             session.set_track_mode_num_smooth_cache_frame(5)
             session.set_track_model_detect_interval(2)
+            session.set_landmark_augmentation_num(1)
+            session.set_landmark_augmentation_num(3)
             session.set_track_lost_recovery_mode(False)
             session.set_enable_track_cost_spend(False)
 
-    @unittest.expectedFailure
-    def test_landmark_augmentation_setter_has_no_native_symbol(self):
+    def test_landmark_augmentation_setter_rejects_invalid_values(self):
         with managed_session(HF_ENABLE_NONE) as session:
-            session.set_landmark_augmentation_num(1)
+            with self.assertRaises(InvalidInputError):
+                session.set_landmark_augmentation_num(0)
 
     def test_logging_controls(self):
         ifac.set_logging_level(HF_LOG_ERROR)
@@ -176,6 +246,32 @@ class ImageStreamCase(NativeResourceCaseMixin, unittest.TestCase):
             1,
         )
         payload.extend(b"\x00")
+
+    def test_gray_image_and_yuv_dimension_contract(self):
+        bgr = load_image("bulk/kun_crop.jpg")
+        gray = np.ascontiguousarray(bgr[:, :, 0])
+        with ifac.ImageStream.load_from_cv_image(gray) as stream:
+            self.assertEqual(stream.data_format, ifac.HF_STREAM_GRAY)
+            decoded = decode_stream(stream, apply_rotation=False)
+        self.assertEqual(decoded.shape, gray.shape + (3,))
+        np.testing.assert_array_equal(decoded[:, :, 0], decoded[:, :, 1])
+        np.testing.assert_array_equal(decoded[:, :, 1], decoded[:, :, 2])
+        difference = decoded[:, :, 0].astype(np.int16) - gray.astype(np.int16)
+        self.assertLess(float(np.mean((difference / 255.0) ** 2)), 2e-5)
+        self.assertLessEqual(int(np.max(np.abs(difference))), 64)
+
+        with self.assertRaises(InvalidInputError):
+            ifac.ImageStream.load_from_ndarray(
+                np.zeros((4, 3), dtype=np.uint8),
+                3,
+                3,
+                HF_STREAM_I420,
+                HF_CAMERA_ROTATION_0,
+            )
+
+    def test_query_dma_heap_path_uses_owned_output_buffer(self):
+        path = ifac.query_expansive_hardware_rockchip_dma_heap_path()
+        self.assertIsInstance(path, str)
 
     def test_source_lifetime_and_context_release(self):
         image = load_image("bulk/yifei.jpg")

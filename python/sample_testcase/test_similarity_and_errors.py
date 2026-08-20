@@ -5,7 +5,7 @@ import unittest
 import numpy as np
 
 import inspireface as ifac
-from inspireface.modules.exception import InvalidInputError
+from inspireface.modules.exception import FeatureHubError, InvalidInputError
 from inspireface.param import HF_ENABLE_NONE
 
 from .common import NativeResourceCaseMixin, load_image, managed_session
@@ -61,6 +61,32 @@ class ErrorContractCase(NativeResourceCaseMixin, unittest.TestCase):
         with self.assertRaises(InvalidInputError):
             ifac.FaceIdentity(np.zeros(512, dtype=np.float64), 1)
 
+    def test_feature_shape_layout_and_finite_validation(self):
+        invalid_features = (
+            np.zeros((32, 16), dtype=np.float32),
+            np.zeros(0, dtype=np.float32),
+            np.zeros(1024, dtype=np.float32)[::2],
+            np.full(512, np.nan, dtype=np.float32),
+            np.full(512, np.inf, dtype=np.float32),
+        )
+        valid = np.zeros(512, dtype=np.float32)
+        for feature in invalid_features:
+            with self.assertRaises(InvalidInputError):
+                ifac.feature_comparison(feature, valid)
+
+    def test_feature_hub_top_k_reports_disabled_hub(self):
+        disabled_operations = (
+            lambda: ifac.feature_hub_face_search_top_k(
+                np.zeros(512, dtype=np.float32),
+                1,
+            ),
+            ifac.feature_hub_get_face_count,
+            ifac.feature_hub_get_face_id_list,
+        )
+        for operation in disabled_operations:
+            with self.assertRaises(FeatureHubError):
+                operation()
+
     def test_session_rejects_invalid_image_and_pipeline_parameter(self):
         with managed_session(HF_ENABLE_NONE) as session:
             with self.assertRaises(InvalidInputError):
@@ -73,7 +99,6 @@ class ErrorContractCase(NativeResourceCaseMixin, unittest.TestCase):
 
     def test_cv_image_shape_validation(self):
         invalid_images = (
-            np.zeros((10, 10), dtype=np.uint8),
             np.zeros((10, 10, 2), dtype=np.uint8),
             np.zeros((10, 10, 3), dtype=np.float32),
             np.zeros((0, 10, 3), dtype=np.uint8),

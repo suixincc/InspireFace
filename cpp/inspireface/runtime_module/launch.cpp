@@ -324,22 +324,38 @@ std::vector<std::string> Launch::GetFaceDetectModelList() const {
     return pImpl->m_face_detect_model_list_;
 }
 
-void Launch::SwitchLandmarkEngine(LandmarkEngine engine) {
+int32_t Launch::SwitchLandmarkEngine(LandmarkEngine engine) {
     std::lock_guard<std::mutex> lock(pImpl->mutex_);
     if (!pImpl->m_archive_ || pImpl->m_archive_->QueryStatus() != SARC_SUCCESS) {
         INSPIRE_LOGE("The InspireFace is not initialized, please call launch first.");
-        return;
+        return HERR_ARCHIVE_NOT_LOAD;
     }
-    auto landmark_param = pImpl->m_archive_->GetLandmarkParam();
-    bool ret = false;
+
+    const char* engine_name = nullptr;
     if (engine == LANDMARK_HYPLMV2_0_25) {
-        ret = landmark_param->ReLoad("landmark");
+        engine_name = "landmark";
     } else if (engine == LANDMARK_HYPLMV2_0_50) {
-        ret = landmark_param->ReLoad("landmark_0_50");
+        engine_name = "landmark_0_50";
     } else if (engine == LANDMARK_INSIGHTFACE_2D106_TRACK) {
-        ret = landmark_param->ReLoad("landmark_insightface_2d106");
+        engine_name = "landmark_insightface_2d106";
+    } else {
+        return HERR_INVALID_PARAM;
     }
-    INSPIREFACE_CHECK_MSG(ret, "Failed to switch landmark engine");
+
+    // Publish a new archive snapshot. Sessions already created keep their old
+    // archive, model, and landmark parameters as one consistent generation.
+    try {
+        auto replacement = std::make_shared<InspireArchive>(*pImpl->m_archive_);
+        if (!replacement->SwitchLandmarkEngine(engine_name)) {
+            INSPIRE_LOGE("Failed to switch landmark engine to %s", engine_name);
+            return HERR_ARCHIVE_LOAD_MODEL_FAILURE;
+        }
+        pImpl->m_archive_.swap(replacement);
+        return HSUCCEED;
+    } catch (const std::exception& error) {
+        INSPIRE_LOGE("Failed to switch landmark engine to %s: %s", engine_name, error.what());
+        return HERR_ARCHIVE_LOAD_MODEL_FAILURE;
+    }
 }
 
 void Launch::SwitchImageProcessingBackend(ImageProcessingBackend backend) {

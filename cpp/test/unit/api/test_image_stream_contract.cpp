@@ -1,6 +1,9 @@
 #include <array>
+#include <algorithm>
 #include <cstdint>
+#include <cstring>
 #include <fstream>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -101,6 +104,56 @@ TEST_CASE("C API valid NV21 buffers can be processed without crossing their boun
     CHECK(output.width == height);
     CHECK(output.height == width);
     CHECK(output.channels == 3);
+}
+
+TEST_CASE("C API bitmap-derived streams retain an immutable pixel snapshot", "[api][contract][image_stream][lifetime]") {
+    constexpr HInt32 width = 8;
+    constexpr HInt32 height = 6;
+    std::vector<uint8_t> pixels(width * height * 3);
+    for (size_t index = 0; index < pixels.size(); ++index) {
+        pixels[index] = static_cast<uint8_t>((index * 31 + 7) & 0xff);
+    }
+    const std::vector<uint8_t> expected = pixels;
+    HFImageBitmapData input = {pixels.data(), width, height, 3};
+    UniqueImageBitmap source;
+    UniqueImageStream stream;
+    REQUIRE(HFCreateImageBitmap(&input, source.Put()) == HSUCCEED);
+    REQUIRE(HFCreateImageStreamFromImageBitmap(source.Get(), HF_CAMERA_ROTATION_0, stream.Put()) == HSUCCEED);
+
+    HFImageBitmapData source_data = {};
+    REQUIRE(HFImageBitmapGetData(source.Get(), &source_data) == HSUCCEED);
+    std::fill(source_data.data, source_data.data + expected.size(), 0);
+    REQUIRE(source.Reset() == HSUCCEED);
+
+    UniqueImageBitmap decoded;
+    REQUIRE(HFCreateImageBitmapFromImageStreamProcess(stream.Get(), decoded.Put(), 0, 1.0f) == HSUCCEED);
+    HFImageBitmapData actual = {};
+    REQUIRE(HFImageBitmapGetData(decoded.Get(), &actual) == HSUCCEED);
+    REQUIRE(actual.width == width);
+    REQUIRE(actual.height == height);
+    REQUIRE(actual.channels == 3);
+    CHECK(std::memcmp(actual.data, expected.data(), expected.size()) == 0);
+}
+
+TEST_CASE("C API image stream rejects arithmetic overflow and unconfigured processing", "[api][contract][image_stream][boundary]") {
+    uint8_t pixel = 0;
+    HFImageData oversized = {&pixel, std::numeric_limits<HInt32>::max(), 2, HF_STREAM_BGRA, HF_CAMERA_ROTATION_0};
+    HFImageStream output = reinterpret_cast<HFImageStream>(static_cast<uintptr_t>(1));
+    CHECK(HFCreateImageStream(&oversized, &output) == HERR_INVALID_IMAGE_STREAM_PARAM);
+    CHECK(output == nullptr);
+
+    UniqueImageStream empty;
+    REQUIRE(HFCreateImageStreamEmpty(empty.Put()) == HSUCCEED);
+    HFImageBitmap bitmap = reinterpret_cast<HFImageBitmap>(static_cast<uintptr_t>(1));
+    CHECK(HFCreateImageBitmapFromImageStreamProcess(empty.Get(), &bitmap, 0, 1.0f) == HERR_INVALID_PARAM);
+    CHECK(bitmap == nullptr);
+
+    std::vector<uint8_t> pixels(8 * 8 * 3, 1);
+    CHECK(HFImageStreamSetFormat(empty.Get(), HF_STREAM_BGR) == HSUCCEED);
+    CHECK(HFImageStreamSetBuffer(empty.Get(), pixels.data(), 8, 8) == HSUCCEED);
+    CHECK(HFCreateImageBitmapFromImageStreamProcess(empty.Get(), &bitmap, 2, 1.0f) == HERR_INVALID_PARAM);
+    CHECK(HFCreateImageBitmapFromImageStreamProcess(empty.Get(), &bitmap, 0, 0.01f) == HERR_INVALID_PARAM);
+    CHECK(HFCreateImageBitmapFromImageStreamProcess(empty.Get(), &bitmap, 0, std::numeric_limits<float>::max()) == HERR_INVALID_PARAM);
 }
 
 TEST_CASE("C API empty image stream supports ordered configuration and rejects stale handles",

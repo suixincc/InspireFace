@@ -18,6 +18,8 @@ COVERED_PUBLIC_API = {
     "SearchResult",
     "SessionCustomParameter",
     "cosine_similarity_convert_to_percentage",
+    "component_versions",
+    "diagnostic_info",
     "disable_logging",
     "feature_comparison",
     "feature_hub_disable",

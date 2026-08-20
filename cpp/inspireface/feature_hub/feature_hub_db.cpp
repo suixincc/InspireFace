@@ -59,6 +59,13 @@ public:
     float m_recognition_threshold_;
     SearchMode m_search_mode_;
     bool m_enable_;
+
+    void InvalidateFaceFeaturePointer() {
+        if (m_face_feature_ptr_cache_) {
+            m_face_feature_ptr_cache_->data = nullptr;
+            m_face_feature_ptr_cache_->dataSize = 0;
+        }
+    }
 };
 
 std::mutex FeatureHubDB::mutex_;
@@ -110,10 +117,10 @@ int32_t FeatureHubDB::EnableHub(const DatabaseConfiguration &configuration) {
         return HERR_INVALID_PARAM;
     }
 
-    float threshold = configuration.recognition_threshold;
+    const float threshold = configuration.recognition_threshold;
     if (!std::isfinite(threshold) || threshold < -1.0f || threshold > 1.0f) {
-        INSPIRE_LOGW("The search threshold must be finite and within [-1, 1]; using 0.5");
-        threshold = 0.5f;
+        INSPIRE_LOGE("The search threshold must be finite and within [-1, 1]");
+        return HERR_INVALID_PARAM;
     }
 
     std::string database_file = ":memory:";
@@ -229,17 +236,27 @@ int32_t FeatureHubDB::CosineSimilarity(const float *v1, const float *v2, int32_t
 }
 
 int32_t FeatureHubDB::GetFaceFeatureCount() {
+    int32_t count = 0;
+    return GetFaceFeatureCount(count) == HSUCCEED ? count : 0;
+}
+
+int32_t FeatureHubDB::GetFaceFeatureCount(int32_t &count) {
     std::lock_guard<std::mutex> lock(mutex_);
+    count = 0;
     if (!pImpl->m_enable_) {
         INSPIRE_LOGW("FeatureHub is disabled, please enable it before it can be served");
-        return 0;
+        return HERR_FT_HUB_DISABLE;
     }
     const auto database = EMBEDDING_DB::AcquireInstance();
     if (!database) {
-        return 0;
+        return HERR_FT_HUB_DATABASE_FAILURE;
     }
-    const int64_t count = database->GetVectorCount();
-    return count < 0 ? 0 : static_cast<int32_t>(std::min<int64_t>(count, std::numeric_limits<int32_t>::max()));
+    const int64_t database_count = database->GetVectorCount();
+    if (database_count < 0 || database_count > std::numeric_limits<int32_t>::max()) {
+        return HERR_FT_HUB_DATABASE_FAILURE;
+    }
+    count = static_cast<int32_t>(database_count);
+    return HSUCCEED;
 }
 
 int32_t FeatureHubDB::SearchFaceFeature(const Embedded &queryFeature, FaceSearchResult &searchResult, bool returnFeature) {
@@ -247,6 +264,7 @@ int32_t FeatureHubDB::SearchFaceFeature(const Embedded &queryFeature, FaceSearch
     searchResult.id = -1;
     searchResult.similarity = -1.0;
     searchResult.feature.clear();
+    pImpl->InvalidateFaceFeaturePointer();
     pImpl->m_search_face_feature_cache_.clear();
     if (!pImpl->m_enable_) {
         INSPIRE_LOGE("FeatureHub is disabled, please enable it before it can be served");
@@ -364,6 +382,7 @@ int32_t FeatureHubDB::FaceFeatureUpdate(const std::vector<float> &feature, int32
 
 int32_t FeatureHubDB::GetFaceFeature(int32_t id) {
     std::lock_guard<std::mutex> lock(mutex_);
+    pImpl->InvalidateFaceFeaturePointer();
     pImpl->m_getter_face_feature_cache_.clear();
     if (!pImpl->m_enable_) {
         return HERR_FT_HUB_DISABLE;

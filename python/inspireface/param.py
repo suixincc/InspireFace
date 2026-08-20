@@ -9,7 +9,7 @@ from inspireface.modules.core.native import HF_ENABLE_NONE, HF_ENABLE_FACE_RECOG
 from inspireface.modules.core.native import HF_DETECT_MODE_ALWAYS_DETECT, HF_DETECT_MODE_LIGHT_TRACK, HF_DETECT_MODE_TRACK_BY_DETECTION
 
 # Image format
-from inspireface.modules.core.native import HF_STREAM_RGB, HF_STREAM_BGR, HF_STREAM_RGBA, HF_STREAM_BGRA, HF_STREAM_YUV_NV12, HF_STREAM_YUV_NV21
+from inspireface.modules.core.native import HF_STREAM_RGB, HF_STREAM_BGR, HF_STREAM_RGBA, HF_STREAM_BGRA, HF_STREAM_YUV_NV12, HF_STREAM_YUV_NV21, HF_STREAM_I420, HF_STREAM_GRAY
 
 # Image rotation
 from inspireface.modules.core.native import HF_CAMERA_ROTATION_0, HF_CAMERA_ROTATION_90, HF_CAMERA_ROTATION_180, HF_CAMERA_ROTATION_270
