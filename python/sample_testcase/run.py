@@ -23,6 +23,8 @@ TEST_MODULES = (
     "sample_testcase.test_recognition_and_hub",
     "sample_testcase.test_similarity_and_errors",
     "sample_testcase.test_api_coverage",
+    "sample_testcase.test_pythonic_contracts",
+    "sample_testcase.test_resource_manager",
     "sample_testcase.test_performance",
 )
 
@@ -99,6 +101,7 @@ def run_with_native_override(args, original_argv):
     with tempfile.TemporaryDirectory(prefix="inspireface-python-suite-") as temp_dir:
         temp_root = Path(temp_dir)
         shutil.copytree(str(PYTHON_ROOT / "inspireface"), str(temp_root / "inspireface"))
+        shutil.copy2(str(PYTHON_ROOT / "version.txt"), str(temp_root / "version.txt"))
         destination = native_library_destination(temp_root)
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(str(native_library), str(destination))

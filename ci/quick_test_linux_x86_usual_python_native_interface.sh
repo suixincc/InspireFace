@@ -34,15 +34,10 @@ cd ${ROOT_DIR}
 mkdir -p python/inspireface/modules/core/libs/linux/x64/
 cp build/${BUILD_DIRNAME}/lib/libInspireFace.so python/inspireface/modules/core/libs/linux/x64/
 
-# Install dependency
-pip install opencv-python
-pip install click
-pip install loguru
-pip install filelock
-pip install modelscope
+# Install the package through its declared build metadata plus test-only OpenCV.
+python -m pip install -e python opencv-python
 
 cd python/
 
-# Run sample
-python sample_face_detection.py ../test_res/data/bulk/woman.png
-
+# Run the complete Python API contract, result, resource, and timing gates.
+python -m sample_testcase.run --verbosity 1

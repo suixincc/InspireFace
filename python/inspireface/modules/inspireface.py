@@ -1,21 +1,29 @@
 import ctypes
 from contextlib import contextmanager
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
-from .core import *
-from typing import Tuple, List
-from dataclasses import dataclass
 from loguru import logger
+
+from . import herror as errcode
+from .core import *
+from .exception import (
+    FeatureHubError,
+    HardwareError,
+    InspireFaceError,
+    InvalidInputError,
+    ProcessingError,
+    ResourceError,
+    SystemNotReadyError,
+    check_error,
+    handle_c_api_errors,
+    validate_feature_data,
+    validate_image_format,
+    validate_session_initialized,
+)
 from .utils import ResourceManager
 from .utils.resource import set_use_oss_download
-from . import herror as errcode
-# Exception system
-from .exception import (
-    check_error, validate_image_format, validate_feature_data, 
-    validate_session_initialized, handle_c_api_errors,
-    InspireFaceError, InvalidInputError, SystemNotReadyError, 
-    ProcessingError, ResourceError, HardwareError, FeatureHubError
-)
 
 # If True, the latest model will not be verified
 IGNORE_VERIFICATION_OF_THE_LATEST_MODEL = False
@@ -107,11 +115,11 @@ def _required_image_bytes(width, height, stream_format):
     return width * height * _PACKED_STREAM_CHANNELS[stream_format]
 
 
-def ignore_check_latest_model(ignore: bool):
+def ignore_check_latest_model(ignore: bool) -> None:
     global IGNORE_VERIFICATION_OF_THE_LATEST_MODEL
     IGNORE_VERIFICATION_OF_THE_LATEST_MODEL = ignore
 
-def use_oss_download(use_oss: bool = True):
+def use_oss_download(use_oss: bool = True) -> None:
     """Enable OSS download instead of ModelScope (for backward compatibility)
     
     Args:
@@ -119,7 +127,7 @@ def use_oss_download(use_oss: bool = True):
     """
     set_use_oss_download(use_oss)
 
-class ImageStream(object):
+class ImageStream:
     """
     ImageStream class handles the conversion of image data from various sources into a format compatible with the InspireFace library.
     It allows loading image data from numpy arrays, buffer objects, and directly from OpenCV images.
@@ -130,8 +138,13 @@ class ImageStream(object):
     copied once into contiguous storage owned by the stream.
     """
 
-    @staticmethod
-    def load_from_cv_image(image: np.ndarray, stream_format=None, rotation=HF_CAMERA_ROTATION_0):
+    @classmethod
+    def load_from_cv_image(
+        cls,
+        image: np.ndarray,
+        stream_format: Optional[int] = None,
+        rotation: int = HF_CAMERA_ROTATION_0,
+    ) -> "ImageStream":
         """
         Load image data from an OpenCV image (numpy ndarray).
 
@@ -184,10 +197,17 @@ class ImageStream(object):
                     stream_format=stream_format,
                     expected_channels=expected_channels
                 )
-        return ImageStream(image, w, h, stream_format, rotation)
+        return cls(image, w, h, stream_format, rotation)
 
-    @staticmethod
-    def load_from_ndarray(data: np.ndarray, width: int, height: int, stream_format: int, rotation: int):
+    @classmethod
+    def load_from_ndarray(
+        cls,
+        data: np.ndarray,
+        width: int,
+        height: int,
+        stream_format: int,
+        rotation: int,
+    ) -> "ImageStream":
         """
         Load image data from a numpy array specifying width and height explicitly.
 
@@ -201,10 +221,17 @@ class ImageStream(object):
         Returns:
             ImageStream: An instance of the ImageStream class.
         """
-        return ImageStream(data, width, height, stream_format, rotation)
+        return cls(data, width, height, stream_format, rotation)
 
-    @staticmethod
-    def load_from_buffer(data, width: int, height: int, stream_format: int, rotation: int):
+    @classmethod
+    def load_from_buffer(
+        cls,
+        data,
+        width: int,
+        height: int,
+        stream_format: int,
+        rotation: int,
+    ) -> "ImageStream":
         """
         Load image data from a buffer (like bytes or bytearray).
 
@@ -218,7 +245,7 @@ class ImageStream(object):
         Returns:
             ImageStream: An instance of the ImageStream class.
         """
-        return ImageStream(data, width, height, stream_format, rotation)
+        return cls(data, width, height, stream_format, rotation)
 
     def __init__(self, data, width: int, height: int, stream_format: int, rotation: int):
         """
@@ -382,7 +409,7 @@ class ImageStream(object):
                 errcode.HERR_INVALID_IMAGE_STREAM_HANDLE
             )
 
-    def write_to_file(self, file_path: str):
+    def write_to_file(self, file_path: str) -> None:
         """
         Write the image stream to a file. Like PATH/image.jpg
         """
@@ -390,7 +417,7 @@ class ImageStream(object):
         ret = HFDeBugImageStreamDecodeSave(self._handle, file_path)
         check_error(ret, "Write ImageStream to file", file_path=file_path)
 
-    def release(self):
+    def release(self) -> None:
         """
         Release the resources associated with the ImageStream.
 
@@ -404,6 +431,13 @@ class ImageStream(object):
             finally:
                 self._data_owner = None
             check_error(ret, "Release ImageStream")
+
+    close = release
+
+    @property
+    def closed(self) -> bool:
+        """Whether the native stream has already been released."""
+        return self._handle is None
 
     def __del__(self):
         """
@@ -422,7 +456,7 @@ class ImageStream(object):
         self.release()
         return False
 
-    def debug_show(self):
+    def debug_show(self) -> None:
         """
         Display the image using a debug function provided by the library.
         """
@@ -430,7 +464,7 @@ class ImageStream(object):
         HFDeBugImageStreamImShow(self._handle)
 
     @property
-    def handle(self):
+    def handle(self) -> HFImageStream:
         """
         Return the internal handle of the image stream.
         Returns:
@@ -451,23 +485,20 @@ class FaceExtended:
         mask_confidence (float): Confidence level of mask detection on the face.
         quality_confidence (float): Confidence level of the overall quality of the face capture.
     """
-    rgb_liveness_confidence: float
-    mask_confidence: float
-    quality_confidence: float
-    left_eye_status_confidence: float
-    right_eye_status_confidence: float
-    action_normal: int
-    action_jaw_open: int
-    action_shake: int
-    action_blink: int
-    action_head_raise: int
-    race: int
-    gender: int
-    age_bracket: int
-    emotion: int
-
-    def __repr__(self) -> str:
-        return f"FaceExtended(rgb_liveness_confidence={self.rgb_liveness_confidence}, mask_confidence={self.mask_confidence}, quality_confidence={self.quality_confidence}, left_eye_status_confidence={self.left_eye_status_confidence}, right_eye_status_confidence={self.right_eye_status_confidence}, action_normal={self.action_normal}, action_jaw_open={self.action_jaw_open}, action_shake={self.action_shake}, action_blink={self.action_blink}, action_head_raise={self.action_head_raise}, race={self.race}, gender={self.gender}, age_bracket={self.age_bracket}, emotion={self.emotion})"
+    rgb_liveness_confidence: float = -1.0
+    mask_confidence: float = -1.0
+    quality_confidence: float = -1.0
+    left_eye_status_confidence: float = -1.0
+    right_eye_status_confidence: float = -1.0
+    action_normal: int = 0
+    action_jaw_open: int = 0
+    action_shake: int = 0
+    action_blink: int = 0
+    action_head_raise: int = 0
+    race: int = -1
+    gender: int = -1
+    age_bracket: int = -1
+    emotion: int = -1
 
 
 class FaceInformation:
@@ -476,12 +507,12 @@ class FaceInformation:
 
     Attributes:
         track_id (int): Unique identifier for tracking the face across frames.
-        location (Tuple): Coordinates of the face in the form (x, y, width, height).
+        location (Tuple): Coordinates of the face in the form (x1, y1, x2, y2).
         roll (float): Roll angle of the face.
         yaw (float): Yaw angle of the face.
         pitch (float): Pitch angle of the face.
         _token (HFFaceBasicToken): A token containing low-level details about the face.
-        _feature (np.array, optional): An optional numpy array holding the facial feature data.
+        _feature (np.ndarray, optional): An optional numpy array holding the facial feature data.
 
     Methods:
         __init__: Initializes a new instance of FaceInformation.
@@ -491,12 +522,12 @@ class FaceInformation:
                  track_id: int,
                  track_count: int,
                  detection_confidence: float,
-                 location: Tuple,
+                 location: Tuple[int, int, int, int],
                  roll: float,
                  yaw: float,
                  pitch: float,
                  _token: HFFaceBasicToken,
-                 _feature: np.array = None):
+                 _feature: Optional[np.ndarray] = None):
         self.track_id = track_id
         self.track_count = track_count
         self.detection_confidence = detection_confidence
@@ -504,6 +535,7 @@ class FaceInformation:
         self.roll = roll
         self.yaw = yaw
         self.pitch = pitch
+        self._feature = _feature
 
         # Calculate the required buffer size for the face token and copy it.
         token_size = HInt32()
@@ -573,11 +605,8 @@ class SessionCustomParameter:
 
         return custom_param
 
-    def __repr__(self) -> str:
-        return f"SessionCustomParameter(enable_recognition={self.enable_recognition}, enable_liveness={self.enable_liveness}, enable_ir_liveness={self.enable_ir_liveness}, enable_mask_detect={self.enable_mask_detect}, enable_face_attribute={self.enable_face_attribute}, enable_face_quality={self.enable_face_quality}, enable_interaction_liveness={self.enable_interaction_liveness}, enable_detect_mode_landmark={self.enable_detect_mode_landmark}, enable_face_pose={self.enable_face_pose}, enable_face_emotion={self.enable_face_emotion})"
 
-
-class InspireFaceSession(object):
+class InspireFaceSession:
     """
     Manages a session for face detection and recognition processes using the InspireFace library.
 
@@ -589,7 +618,8 @@ class InspireFaceSession(object):
     """
 
     def __init__(self, param, detect_mode: int = HF_DETECT_MODE_ALWAYS_DETECT,
-                 max_detect_num: int = 10, detect_pixel_level=-1, track_by_detect_mode_fps=-1):
+                 max_detect_num: int = 10, detect_pixel_level=-1,
+                 track_by_detect_mode_fps=-1, auto_launch: bool = True):
         """
         Initializes a new session with the provided configuration parameters.
         
@@ -597,6 +627,9 @@ class InspireFaceSession(object):
             param (int or SessionCustomParameter): Configuration parameters or flags.
             detect_mode (int): Detection mode to be used (e.g., image-based detection).
             max_detect_num (int): Maximum number of faces to detect.
+            auto_launch (bool): Preserve the legacy behavior of launching the
+                default model when needed. Set to False to require explicit
+                process initialization.
             
         Raises:
             SystemNotReadyError: If InspireFace is not launched.
@@ -608,11 +641,21 @@ class InspireFaceSession(object):
         self.param = param
         self._max_detect_num = None
         
-        # If InspireFace is not initialized, run launch() use Pikachu model
+        if not isinstance(auto_launch, bool):
+            raise InvalidInputError(
+                "auto_launch must be a bool",
+                errcode.HERR_INVALID_PARAM,
+                auto_launch=auto_launch,
+            )
+
+        # Preserve legacy auto-launch behavior while allowing explicit lifecycle management.
         if not query_launch_status():
-            ret = launch()
-            if not ret:
-                raise SystemNotReadyError("Failed to launch InspireFace automatically")
+            if not auto_launch:
+                raise SystemNotReadyError(
+                    "InspireFace is not launched; call launch() before creating a session",
+                    errcode.HERR_ARCHIVE_NOT_LOAD,
+                )
+            launch()
 
         self._sess = HFSession()
         
@@ -623,8 +666,11 @@ class InspireFaceSession(object):
             ret = HFCreateInspireFaceSessionOptional(self.param, detect_mode, max_detect_num, detect_pixel_level,
                                                      track_by_detect_mode_fps, self._sess)
         else:
-            raise InvalidInputError("Session parameter must be SessionCustomParameter or int", 
-                                   context={'param_type': type(self.param).__name__})
+            raise InvalidInputError(
+                "Session parameter must be SessionCustomParameter or int",
+                errcode.HERR_INVALID_PARAM,
+                param_type=type(self.param).__name__,
+            )
         
         check_error(ret, "Create InspireFace session", 
                    detect_mode=detect_mode, max_detect_num=max_detect_num)
@@ -660,7 +706,7 @@ class InspireFaceSession(object):
                 tokens = self._get_faces_tokens()
                 track_counts = self._get_faces_track_counts()
 
-                infos = list()
+                infos = []
                 for idx in range(self.multiple_faces.detectedNum):
                     top_left = (boxes[idx][0], boxes[idx][1])
                     bottom_right = (boxes[idx][0] + boxes[idx][2], boxes[idx][1] + boxes[idx][3])
@@ -687,7 +733,7 @@ class InspireFaceSession(object):
                 return infos
             return []
         
-    def get_face_five_key_points(self, single_face: FaceInformation):
+    def get_face_five_key_points(self, single_face: FaceInformation) -> np.ndarray:
         """Get five key points for a detected face"""
         validate_session_initialized(self, "Get face five key points")
         if not isinstance(single_face, FaceInformation):
@@ -704,7 +750,7 @@ class InspireFaceSession(object):
 
         return np.asarray(landmark).reshape(-1, 2)
 
-    def get_face_dense_landmark(self, single_face: FaceInformation):
+    def get_face_dense_landmark(self, single_face: FaceInformation) -> np.ndarray:
         """Get dense landmarks for a detected face"""
         validate_session_initialized(self, "Get face dense landmark")
         if not isinstance(single_face, FaceInformation):
@@ -729,19 +775,19 @@ class InspireFaceSession(object):
 
         return np.asarray(landmark).reshape(-1, 2)
     
-    def print_track_cost_spend(self):
+    def print_track_cost_spend(self) -> None:
         """Print tracking cost statistics"""
         validate_session_initialized(self, "Print track cost spend")
         ret = HFSessionPrintTrackCostSpend(self._sess)
         check_error(ret, "Print track cost spend")
 
-    def set_enable_track_cost_spend(self, enable: bool):
+    def set_enable_track_cost_spend(self, enable: bool) -> None:
         """Enable or disable track cost spend monitoring"""
         validate_session_initialized(self, "Set enable track cost spend")
         ret = HFSessionSetEnableTrackCostSpend(self._sess, enable)
         check_error(ret, "Set enable track cost spend", enable=enable)
     
-    def set_detection_confidence_threshold(self, threshold: float):
+    def set_detection_confidence_threshold(self, threshold: float) -> None:
         """
         Sets the detection confidence threshold for the face detection session.
 
@@ -752,7 +798,7 @@ class InspireFaceSession(object):
         ret = HFSessionSetFaceDetectThreshold(self._sess, threshold)
         check_error(ret, "Set detection confidence threshold", threshold=threshold)
 
-    def set_track_preview_size(self, size=192):
+    def set_track_preview_size(self, size: int = 192) -> None:
         """
         Sets the preview size for the face tracking session.
 
@@ -763,37 +809,37 @@ class InspireFaceSession(object):
         ret = HFSessionSetTrackPreviewSize(self._sess, size)
         check_error(ret, "Set track preview size", size=size)
 
-    def set_filter_minimum_face_pixel_size(self, min_size=32):
+    def set_filter_minimum_face_pixel_size(self, min_size: int = 32) -> None:
         """Set minimum face pixel size filter"""
         validate_session_initialized(self, "Set filter minimum face pixel size")
         ret = HFSessionSetFilterMinimumFacePixelSize(self._sess, min_size)
         check_error(ret, "Set filter minimum face pixel size", min_size=min_size)
 
-    def set_track_mode_smooth_ratio(self, ratio=0.025):
+    def set_track_mode_smooth_ratio(self, ratio: float = 0.025) -> None:
         """Set track mode smooth ratio"""
         validate_session_initialized(self, "Set track mode smooth ratio")
         ret = HFSessionSetTrackModeSmoothRatio(self._sess, ratio)
         check_error(ret, "Set track mode smooth ratio", ratio=ratio)
 
-    def set_track_mode_num_smooth_cache_frame(self, num=15):
+    def set_track_mode_num_smooth_cache_frame(self, num: int = 15) -> None:
         """Set track mode number of smooth cache frames"""
         validate_session_initialized(self, "Set track mode num smooth cache frame")
         ret = HFSessionSetTrackModeNumSmoothCacheFrame(self._sess, num)
         check_error(ret, "Set track mode num smooth cache frame", num=num)
 
-    def set_track_model_detect_interval(self, num=20):
+    def set_track_model_detect_interval(self, num: int = 20) -> None:
         """Set track model detect interval"""
         validate_session_initialized(self, "Set track model detect interval")
         ret = HFSessionSetTrackModeDetectInterval(self._sess, num)
         check_error(ret, "Set track model detect interval", num=num)
 
-    def set_landmark_augmentation_num(self, num=1):
+    def set_landmark_augmentation_num(self, num: int = 1) -> None:
         """Set landmark augmentation number"""
         validate_session_initialized(self, "Set landmark augmentation num")
         ret = HFSessionSetLandmarkAugmentationNum(self._sess, num)
         check_error(ret, "Set landmark augmentation num", num=num)
 
-    def set_track_lost_recovery_mode(self, value=False):
+    def set_track_lost_recovery_mode(self, value: bool = False) -> None:
         """Set track lost recovery mode"""
         validate_session_initialized(self, "Set track lost recovery mode")
         ret = HFSessionSetTrackLostRecoveryMode(self._sess, value)
@@ -815,7 +861,7 @@ class InspireFaceSession(object):
         validate_session_initialized(self, "Face pipeline processing")
         if not isinstance(faces, (list, tuple)) or not all(isinstance(face, FaceInformation) for face in faces):
             raise InvalidInputError("faces must be a sequence of FaceInformation", errcode.HERR_INVALID_FACE_LIST)
-        if len(faces) == 0:
+        if not faces:
             return []
         if len(faces) > _INT32_MAX:
             raise InvalidInputError("faces exceeds the native API limit", errcode.HERR_INVALID_FACE_LIST)
@@ -832,7 +878,7 @@ class InspireFaceSession(object):
 
             check_error(ret, "Face pipeline processing", num_faces=len(faces))
 
-            extends = [FaceExtended(-1.0, -1.0, -1.0, -1.0, -1.0, 0, 0, 0, 0, 0, -1, -1, -1, -1) for _ in range(len(faces))]
+            extends = [FaceExtended() for _ in faces]
             self._update_mask_confidence(exec_param, flag, extends)
             self._update_rgb_liveness_confidence(exec_param, flag, extends)
             self._update_face_quality_confidence(exec_param, flag, extends)
@@ -843,7 +889,7 @@ class InspireFaceSession(object):
             return extends
 
     @handle_c_api_errors("Face feature extraction")
-    def face_feature_extract(self, image, face_information: FaceInformation):
+    def face_feature_extract(self, image, face_information: FaceInformation) -> np.ndarray:
         """
         Extracts facial features from a specified face within an image for recognition or comparison purposes.
 
@@ -880,11 +926,13 @@ class InspireFaceSession(object):
         """Convert image to ImageStream if needed"""
         if isinstance(image, np.ndarray):
             return ImageStream.load_from_cv_image(image)
-        elif isinstance(image, ImageStream):
+        if isinstance(image, ImageStream):
             return image
-        else:
-            raise InvalidInputError("Image must be numpy.ndarray or ImageStream", 
-                                   context={'input_type': type(image).__name__})
+        raise InvalidInputError(
+            "Image must be numpy.ndarray or ImageStream",
+            errcode.HERR_INVALID_PARAM,
+            input_type=type(image).__name__,
+        )
 
     @staticmethod
     @contextmanager
@@ -934,8 +982,11 @@ class InspireFaceSession(object):
         elif isinstance(exec_param, (int, np.integer)) and not isinstance(exec_param, (bool, np.bool_)):
             return HFMultipleFacePipelineProcessOptional, exec_param, "bitmask"
         else:
-            raise InvalidInputError("exec_param must be SessionCustomParameter or int",
-                                   context={'param_type': type(exec_param).__name__})
+            raise InvalidInputError(
+                "exec_param must be SessionCustomParameter or int",
+                errcode.HERR_INVALID_PARAM,
+                param_type=type(exec_param).__name__,
+            )
 
     def _update_mask_confidence(self, exec_param, flag, extends):
         """Update mask confidence in extends list"""
@@ -1093,13 +1144,20 @@ class InspireFaceSession(object):
         tokens = [tokens_ptr[i] for i in range(num_of_faces)]
         return tokens
 
-    def release(self):
+    def release(self) -> None:
         """Release session resources"""
         handle = self._sess
         if handle is not None:
             self._sess = None
             ret = HFReleaseInspireFaceSession(handle)
             check_error(ret, "Release InspireFace session")
+
+    close = release
+
+    @property
+    def closed(self) -> bool:
+        """Whether the native session has already been released."""
+        return self._sess is None
 
     def __del__(self):
         try:
@@ -1130,7 +1188,7 @@ def _check_modelscope_availability():
     modelscope_available = True
     try:
         from modelscope.hub.snapshot_download import snapshot_download
-    except Exception as error:
+    except ImportError as error:
         modelscope_available = False
     
     if not USE_OSS_DOWNLOAD and not modelscope_available:
@@ -1243,19 +1301,19 @@ def query_launch_status() -> bool:
     check_error(ret, "Query launch status")
     return status.value == 1
 
-def switch_landmark_engine(engine: int):
+def switch_landmark_engine(engine: int) -> bool:
     """Switch landmark engine"""
     ret = HFSwitchLandmarkEngine(engine)
     check_error(ret, "Switch landmark engine", engine=engine)
     return True
 
-def switch_image_processing_backend(backend: int):
+def switch_image_processing_backend(backend: int) -> bool:
     """Switch image processing backend"""
     ret = HFSwitchImageProcessingBackend(backend)
     check_error(ret, "Switch image processing backend", backend=backend)
     return True
 
-def set_image_process_aligned_width(width: int):
+def set_image_process_aligned_width(width: int) -> bool:
     """Set the image process aligned width"""
     ret = HFSetImageProcessAlignedWidth(width)
     check_error(ret, "Set image process aligned width", width=width)
@@ -1350,7 +1408,7 @@ def feature_comparison(feature1: np.ndarray, feature2: np.ndarray) -> float:
     return float(comparison_result.value)
 
 
-class FaceIdentity(object):
+class FaceIdentity:
     """
     Represents an identity based on facial features, associating the features with a custom ID and a tag.
 
@@ -1378,10 +1436,22 @@ class FaceIdentity(object):
         self.id = normalized_id
 
     def __repr__(self) -> str:
-        return f"FaceIdentity(id={self.id}, feature={self.feature})"
+        return "FaceIdentity(id={}, feature=ndarray(shape={}, dtype={}))".format(
+            self.id,
+            self.feature.shape,
+            self.feature.dtype,
+        )
 
-    @staticmethod
-    def from_ctypes(raw_identity: HFFaceFeatureIdentity):
+    @property
+    def custom_id(self) -> int:
+        """Python-friendly alias for the legacy ``id`` attribute."""
+        return self.id
+
+    @classmethod
+    def from_ctypes(
+        cls,
+        raw_identity: HFFaceFeatureIdentity,
+    ) -> "FaceIdentity":
         """
         Converts a ctypes structure representing a face identity into a FaceIdentity object.
 
@@ -1404,7 +1474,7 @@ class FaceIdentity(object):
         feature_data = np.ctypeslib.as_array(cast(feature_data_ptr, HPFloat), (feature_size,))
         id_ = raw_identity.id
 
-        return FaceIdentity(data=feature_data, id=id_)
+        return cls(data=feature_data, id=id_)
 
     def _c_struct(self):
         """
@@ -1423,7 +1493,7 @@ class FaceIdentity(object):
         )
 
 
-def feature_hub_set_search_threshold(threshold: float):
+def feature_hub_set_search_threshold(threshold: float) -> None:
     """
     Sets the search threshold for face matching in the FeatureHub.
 
@@ -1461,19 +1531,14 @@ class SearchResult:
     """
     confidence: float
     similar_identity: FaceIdentity
-    matched: bool = None
+    matched: Optional[bool] = None
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if self.matched is None:
             self.matched = self.similar_identity.id != HF_INVALID_FACE_ID
         else:
             self.matched = bool(self.matched)
 
-    def __repr__(self) -> str:
-        return (
-            f"SearchResult(confidence={self.confidence}, "
-            f"similar_identity={self.similar_identity}, matched={self.matched})"
-        )
 
 def feature_hub_face_search(data: np.ndarray) -> SearchResult:
     """
@@ -1516,7 +1581,10 @@ def feature_hub_face_search(data: np.ndarray) -> SearchResult:
     )
 
 
-def feature_hub_face_search_top_k(data: np.ndarray, top_k: int) -> List[Tuple]:
+def feature_hub_face_search_top_k(
+    data: np.ndarray,
+    top_k: int,
+) -> List[Tuple[float, int]]:
     """
     Searches for the top 'k' most similar face identities in the feature hub based on provided facial features.
 
@@ -1554,8 +1622,8 @@ def feature_hub_face_search_top_k(data: np.ndarray, top_k: int) -> List[Tuple]:
         )
     outputs = []
     for idx in range(results.size):
-        confidence = results.confidence[idx]
-        id_ = results.ids[idx]
+        confidence = float(results.confidence[idx])
+        id_ = int(results.ids[idx])
         outputs.append((confidence, id_))
     return outputs
 
@@ -1597,7 +1665,7 @@ def feature_hub_face_remove(custom_id: int) -> bool:
     return True
 
 
-def feature_hub_get_face_identity(custom_id: int):
+def feature_hub_get_face_identity(custom_id: int) -> FaceIdentity:
     """
     Retrieves a face identity from the feature hub using its custom ID.
 
@@ -1654,7 +1722,7 @@ def feature_hub_get_face_id_list() -> List[int]:
         )
     return [int(ids.ids[i]) for i in range(ids.size)]
 
-def view_table_in_terminal():
+def view_table_in_terminal() -> None:
     """
     Displays the database table of face identities in the terminal.
 
@@ -1673,7 +1741,7 @@ def get_recommended_cosine_threshold() -> float:
     check_error(ret, "Get recommended cosine threshold")
     return float(threshold.value)
 
-def get_similarity_converter_config() -> dict:
+def get_similarity_converter_config() -> Dict[str, float]:
     """
     Retrieves the similarity converter configuration.
     """
@@ -1689,7 +1757,7 @@ def get_similarity_converter_config() -> dict:
     }
     return cfg
 
-def set_similarity_converter_config(cfg: dict):
+def set_similarity_converter_config(cfg: Dict[str, float]) -> None:
     """
     Sets the similarity converter configuration.
     """
@@ -1830,14 +1898,14 @@ def disable_logging() -> None:
     ret = HFLogDisable()
     check_error(ret, "Disable logging")
 
-def show_system_resource_statistics():
+def show_system_resource_statistics() -> None:
     """
     Displays the system resource information.
     """
     ret = HFDeBugShowResourceStatistics()
     check_error(ret, "Show system resource statistics")
 
-def switch_apple_coreml_inference_mode(mode: int):
+def switch_apple_coreml_inference_mode(mode: int) -> bool:
     """
     Switches the Apple CoreML inference mode.
     """
@@ -1845,7 +1913,7 @@ def switch_apple_coreml_inference_mode(mode: int):
     check_error(ret, "Set Apple CoreML inference mode", mode=mode)
     return True
 
-def set_expansive_hardware_rockchip_dma_heap_path(path: str):
+def set_expansive_hardware_rockchip_dma_heap_path(path: str) -> None:
     """
     Sets the path to the expansive hardware Rockchip DMA heap.
     """
@@ -1872,7 +1940,7 @@ def query_expansive_hardware_rockchip_dma_heap_path() -> str:
     return path.value.decode("utf-8")
 
 
-def set_cuda_device_id(device_id: int):
+def set_cuda_device_id(device_id: int) -> None:
     """
     Sets the CUDA device ID.
     """
@@ -1883,12 +1951,12 @@ def get_cuda_device_id() -> int:
     """
     Gets the CUDA device ID.
     """
-    id = HInt32()
-    ret = HFGetCudaDeviceId(byref(id))
+    device_id = HInt32()
+    ret = HFGetCudaDeviceId(byref(device_id))
     check_error(ret, "Get CUDA device ID")
-    return int(id.value)
+    return int(device_id.value)
 
-def print_cuda_device_info():
+def print_cuda_device_info() -> None:
     """
     Prints the CUDA device information.
     """
