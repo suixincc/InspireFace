@@ -260,7 +260,13 @@ int32_t FeatureHubDB::GetFaceFeatureCount(int32_t &count) {
 }
 
 int32_t FeatureHubDB::SearchFaceFeature(const Embedded &queryFeature, FaceSearchResult &searchResult, bool returnFeature) {
+    bool found = false;
+    return SearchFaceFeatureV2(queryFeature, searchResult, found, returnFeature);
+}
+
+int32_t FeatureHubDB::SearchFaceFeatureV2(const Embedded &queryFeature, FaceSearchResult &searchResult, bool &found, bool returnFeature) {
     std::lock_guard<std::mutex> lock(mutex_);
+    found = false;
     searchResult.id = -1;
     searchResult.similarity = -1.0;
     searchResult.feature.clear();
@@ -283,6 +289,7 @@ int32_t FeatureHubDB::SearchFaceFeature(const Embedded &queryFeature, FaceSearch
         return HSUCCEED;
     }
 
+    found = true;
     searchResult = std::move(results.front());
     if (returnFeature) {
         pImpl->m_search_face_feature_cache_ = searchResult.feature;
@@ -337,6 +344,10 @@ int32_t FeatureHubDB::SearchFaceFeatureTopK(const Embedded &queryFeature, std::v
 }
 
 int32_t FeatureHubDB::FaceFeatureInsert(const std::vector<float> &feature, int32_t id, int64_t &result_id) {
+    return FaceFeatureInsert(feature, static_cast<int64_t>(id), result_id);
+}
+
+int32_t FeatureHubDB::FaceFeatureInsert(const std::vector<float> &feature, int64_t id, int64_t &result_id) {
     std::lock_guard<std::mutex> lock(mutex_);
     result_id = -1;
     if (!pImpl->m_enable_) {
@@ -344,6 +355,9 @@ int32_t FeatureHubDB::FaceFeatureInsert(const std::vector<float> &feature, int32
     }
     if (!IsFiniteFeature(feature)) {
         return HERR_FT_HUB_INVALID_FEATURE;
+    }
+    if (pImpl->m_db_configuration_.primary_key_mode == PrimaryKeyMode::MANUAL_INPUT && id == INSPIRE_INVALID_ID) {
+        return HERR_INVALID_PARAM;
     }
     const auto database = EMBEDDING_DB::AcquireInstance();
     if (!database || !database->InsertVector(id, feature, result_id)) {
@@ -354,6 +368,10 @@ int32_t FeatureHubDB::FaceFeatureInsert(const std::vector<float> &feature, int32
 }
 
 int32_t FeatureHubDB::FaceFeatureRemove(int32_t id) {
+    return FaceFeatureRemove(static_cast<int64_t>(id));
+}
+
+int32_t FeatureHubDB::FaceFeatureRemove(int64_t id) {
     std::lock_guard<std::mutex> lock(mutex_);
     if (!pImpl->m_enable_) {
         return HERR_FT_HUB_DISABLE;
@@ -366,6 +384,10 @@ int32_t FeatureHubDB::FaceFeatureRemove(int32_t id) {
 }
 
 int32_t FeatureHubDB::FaceFeatureUpdate(const std::vector<float> &feature, int32_t customId) {
+    return FaceFeatureUpdate(feature, static_cast<int64_t>(customId));
+}
+
+int32_t FeatureHubDB::FaceFeatureUpdate(const std::vector<float> &feature, int64_t customId) {
     std::lock_guard<std::mutex> lock(mutex_);
     if (!pImpl->m_enable_) {
         return HERR_FT_HUB_DISABLE;
@@ -381,6 +403,10 @@ int32_t FeatureHubDB::FaceFeatureUpdate(const std::vector<float> &feature, int32
 }
 
 int32_t FeatureHubDB::GetFaceFeature(int32_t id) {
+    return GetFaceFeature(static_cast<int64_t>(id));
+}
+
+int32_t FeatureHubDB::GetFaceFeature(int64_t id) {
     std::lock_guard<std::mutex> lock(mutex_);
     pImpl->InvalidateFaceFeaturePointer();
     pImpl->m_getter_face_feature_cache_.clear();
@@ -399,6 +425,10 @@ int32_t FeatureHubDB::GetFaceFeature(int32_t id) {
 }
 
 int32_t FeatureHubDB::GetFaceFeature(int32_t id, std::vector<float> &feature) {
+    return GetFaceFeature(static_cast<int64_t>(id), feature);
+}
+
+int32_t FeatureHubDB::GetFaceFeature(int64_t id, std::vector<float> &feature) {
     std::lock_guard<std::mutex> lock(mutex_);
     feature.clear();
     if (!pImpl->m_enable_) {
@@ -412,6 +442,10 @@ int32_t FeatureHubDB::GetFaceFeature(int32_t id, std::vector<float> &feature) {
 }
 
 int32_t FeatureHubDB::GetFaceFeature(int32_t id, FaceEmbedding &feature) {
+    return GetFaceFeature(static_cast<int64_t>(id), feature);
+}
+
+int32_t FeatureHubDB::GetFaceFeature(int64_t id, FaceEmbedding &feature) {
     return GetFaceFeature(id, feature.embedding);
 }
 

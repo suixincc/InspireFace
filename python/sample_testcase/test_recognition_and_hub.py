@@ -1,6 +1,7 @@
 """Recognition, parallel-session, and FeatureHub regression cases."""
 
 import tempfile
+import time
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -11,6 +12,7 @@ import inspireface as ifac
 from inspireface.param import (
     HF_PK_AUTO_INCREMENT,
     HF_PK_MANUAL_INPUT,
+    HF_INVALID_FACE_ID,
     HF_SEARCH_MODE_EXHAUSTIVE,
 )
 
@@ -19,6 +21,7 @@ from .common import (
     extract_first_feature,
     managed_feature_hub,
     managed_session,
+    record_metric,
 )
 
 
@@ -95,11 +98,20 @@ class FeatureHubCase(NativeResourceCaseMixin, unittest.TestCase):
             identity_snapshot = identity.feature.copy()
 
             result = ifac.feature_hub_face_search(first)
+            self.assertTrue(result.matched)
             self.assertEqual(result.similar_identity.id, 101)
             self.assertGreater(result.confidence, 0.9)
             top_k = ifac.feature_hub_face_search_top_k(first, 2)
             self.assertEqual(len(top_k), 2)
             self.assertEqual(top_k[0][1], 101)
+
+            ifac.feature_hub_set_search_threshold(1.0)
+            no_match = ifac.feature_hub_face_search(third)
+            self.assertFalse(no_match.matched)
+            self.assertEqual(no_match.similar_identity.id, HF_INVALID_FACE_ID)
+            self.assertEqual(no_match.similar_identity.feature.size, 0)
+            self.assertEqual(no_match.confidence, -1.0)
+            ifac.feature_hub_set_search_threshold(0.35)
 
             self.assertTrue(ifac.feature_hub_face_update(ifac.FaceIdentity(third, 101)))
             updated = ifac.feature_hub_face_search(third)
@@ -117,14 +129,41 @@ class FeatureHubCase(NativeResourceCaseMixin, unittest.TestCase):
     def test_auto_increment_allocates_unique_ids(self):
         first, second, _ = three_features()
         with managed_feature_hub(self.memory_configuration(HF_PK_AUTO_INCREMENT)):
-            _, first_id = ifac.feature_hub_face_insert(ifac.FaceIdentity(first, -1))
-            _, second_id = ifac.feature_hub_face_insert(ifac.FaceIdentity(second, -1))
+            _, first_id = ifac.feature_hub_face_insert(ifac.FaceIdentity(first, HF_INVALID_FACE_ID))
+            _, second_id = ifac.feature_hub_face_insert(ifac.FaceIdentity(second, HF_INVALID_FACE_ID))
             self.assertGreaterEqual(first_id, 0)
             self.assertGreater(second_id, first_id)
             self.assertEqual(ifac.feature_hub_get_face_count(), 2)
 
+    def test_manual_mode_reserves_invalid_id_and_supports_64_bit_ids(self):
+        first, second, _ = three_features()
+        wide_id = (1 << 40) + 17
+        with managed_feature_hub(self.memory_configuration()):
+            with self.assertRaises(ifac.InvalidInputError):
+                ifac.feature_hub_face_insert(ifac.FaceIdentity(first, HF_INVALID_FACE_ID))
+
+            inserted, allocated = ifac.feature_hub_face_insert(ifac.FaceIdentity(first, wide_id))
+            self.assertTrue(inserted)
+            self.assertEqual(allocated, wide_id)
+            identity = ifac.feature_hub_get_face_identity(wide_id)
+            self.assertEqual(identity.id, wide_id)
+            np.testing.assert_allclose(identity.feature, first, rtol=0.0, atol=1e-6)
+
+            result = ifac.feature_hub_face_search(first)
+            self.assertTrue(result.matched)
+            self.assertEqual(result.similar_identity.id, wide_id)
+            self.assertGreater(result.confidence, 0.99)
+            self.assertEqual(ifac.feature_hub_face_search_top_k(first, 1)[0][1], wide_id)
+
+            self.assertTrue(ifac.feature_hub_face_update(ifac.FaceIdentity(second, wide_id)))
+            updated = ifac.feature_hub_get_face_identity(wide_id)
+            np.testing.assert_allclose(updated.feature, second, rtol=0.0, atol=1e-6)
+            self.assertTrue(ifac.feature_hub_face_remove(wide_id))
+            self.assertEqual(ifac.feature_hub_get_face_count(), 0)
+
     def test_persistent_mode_survives_reenable(self):
         first, _, _ = three_features()
+        persistent_id = (1 << 40) + 501
         with tempfile.TemporaryDirectory(prefix="inspireface-feature-hub-") as temp_dir:
             database = Path(temp_dir) / "feature.db"
             configuration = ifac.FeatureHubConfiguration(
@@ -136,7 +175,7 @@ class FeatureHubCase(NativeResourceCaseMixin, unittest.TestCase):
             )
             ifac.feature_hub_enable(configuration)
             try:
-                ifac.feature_hub_face_insert(ifac.FaceIdentity(first, 501))
+                ifac.feature_hub_face_insert(ifac.FaceIdentity(first, persistent_id))
                 self.assertEqual(ifac.feature_hub_get_face_count(), 1)
             finally:
                 ifac.feature_hub_disable()
@@ -144,7 +183,10 @@ class FeatureHubCase(NativeResourceCaseMixin, unittest.TestCase):
             ifac.feature_hub_enable(configuration)
             try:
                 self.assertEqual(ifac.feature_hub_get_face_count(), 1)
-                self.assertEqual(ifac.feature_hub_get_face_identity(501).id, 501)
+                self.assertEqual(ifac.feature_hub_get_face_identity(persistent_id).id, persistent_id)
+                result = ifac.feature_hub_face_search(first)
+                self.assertTrue(result.matched)
+                self.assertEqual(result.similar_identity.id, persistent_id)
             finally:
                 ifac.feature_hub_disable()
 
@@ -158,9 +200,13 @@ class FeatureHubCase(NativeResourceCaseMixin, unittest.TestCase):
                 result = ifac.feature_hub_face_search(first)
                 return result.similar_identity.id, result.confidence
 
+            started = time.perf_counter()
             with ThreadPoolExecutor(max_workers=4) as executor:
                 results = list(executor.map(search, range(32)))
+            elapsed = time.perf_counter() - started
+            record_metric("feature_hub_parallel_search_32_total_ms", elapsed * 1000.0)
             self.assertTrue(all(identity_id == 701 for identity_id, _ in results))
             baseline = results[0][1]
             for _, confidence in results:
                 self.assertAlmostEqual(confidence, baseline, delta=1e-6)
+            self.assertLess(elapsed, 2.0)

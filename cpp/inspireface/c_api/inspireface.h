@@ -923,6 +923,9 @@ typedef enum HFPKMode {
     HF_PK_MANUAL_INPUT,        ///< Manual input mode for primary key.
 } HFPKMode;
 
+/** Reserved legacy sentinel. Manual primary-key mode does not accept this ID. */
+#define HF_INVALID_FACE_ID ((HFaceId)-1)
+
 /**
  * @brief Struct for database configuration.
  *
@@ -960,10 +963,24 @@ HYPER_CAPI_EXPORT extern HResult HFFeatureHubDataDisable();
  * This struct associates a custom identifier and a tag with a specific face feature.
  */
 typedef struct HFFaceFeatureIdentity {
-    HFaceId id;              ///< If you use automatic assignment id mode when inserting, ignore it.
+    HFaceId id;              ///< Ignored in automatic mode. HF_INVALID_FACE_ID is reserved in manual mode.
     PHFFaceFeature feature;  ///< Pointer to the face feature.
     // HString tag;                 ///< Not supported yet
 } HFFaceFeatureIdentity, *PHFFaceFeatureIdentity;
+
+/**
+ * @brief Unambiguous single-search result.
+ *
+ * `found` reports whether a feature passed the configured threshold, so callers
+ * do not need to infer match state from a sentinel ID. `feature.data` remains
+ * valid until the next single-search call on the same thread.
+ */
+typedef struct HFFeatureHubSearchResultV2 {
+    HInt32 found;
+    HFaceId id;
+    HFloat confidence;
+    HFFaceFeature feature;
+} HFFeatureHubSearchResultV2, *PHFFeatureHubSearchResultV2;
 
 /**
  * Search structure for top-k mode
@@ -1076,6 +1093,14 @@ HYPER_CAPI_EXPORT extern HResult HFFeatureHubInsertFeature(HFFaceFeatureIdentity
  * @return HResult indicating the success or failure of the operation.
  */
 HYPER_CAPI_EXPORT extern HResult HFFeatureHubFaceSearch(HFFaceFeature searchFeature, HPFloat confidence, PHFFaceFeatureIdentity mostSimilar);
+
+/**
+ * @brief Search for the most similar feature with an explicit match state.
+ *
+ * This API supports the full signed 64-bit HFaceId domain, including legacy
+ * persisted records whose ID equals HF_INVALID_FACE_ID.
+ */
+HYPER_CAPI_EXPORT extern HResult HFFeatureHubFaceSearchV2(HFFaceFeature searchFeature, PHFFeatureHubSearchResultV2 result);
 
 /**
  * @brief Search for the most similar k facial features in the feature group

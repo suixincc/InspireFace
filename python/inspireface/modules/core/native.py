@@ -1706,6 +1706,8 @@ HF_PK_MANUAL_INPUT = (HF_PK_AUTO_INCREMENT + 1)# /Users/tunm/work/InspireFace/cp
 
 HFPKMode = enum_HFPKMode# /Users/tunm/work/InspireFace/cpp/inspireface/c_api/inspireface.h: 903
 
+HF_INVALID_FACE_ID = -1
+
 # /Users/tunm/work/InspireFace/cpp/inspireface/c_api/inspireface.h: 916
 class struct_HFFeatureHubConfiguration(Structure):
     pass
@@ -1755,6 +1757,25 @@ struct_HFFaceFeatureIdentity._fields_ = [
 HFFaceFeatureIdentity = struct_HFFaceFeatureIdentity# /Users/tunm/work/InspireFace/cpp/inspireface/c_api/inspireface.h: 945
 
 PHFFaceFeatureIdentity = POINTER(struct_HFFaceFeatureIdentity)# /Users/tunm/work/InspireFace/cpp/inspireface/c_api/inspireface.h: 945
+
+class struct_HFFeatureHubSearchResultV2(Structure):
+    pass
+
+struct_HFFeatureHubSearchResultV2.__slots__ = [
+    'found',
+    'id',
+    'confidence',
+    'feature',
+]
+struct_HFFeatureHubSearchResultV2._fields_ = [
+    ('found', HInt32),
+    ('id', HFaceId),
+    ('confidence', HFloat),
+    ('feature', HFFaceFeature),
+]
+
+HFFeatureHubSearchResultV2 = struct_HFFeatureHubSearchResultV2
+PHFFeatureHubSearchResultV2 = POINTER(struct_HFFeatureHubSearchResultV2)
 
 # /Users/tunm/work/InspireFace/cpp/inspireface/c_api/inspireface.h: 954
 class struct_HFSearchTopKResults(Structure):
@@ -1851,6 +1872,11 @@ if _libs[_LIBRARY_FILENAME].has("HFFeatureHubFaceSearch", "cdecl"):
     HFFeatureHubFaceSearch = _libs[_LIBRARY_FILENAME].get("HFFeatureHubFaceSearch", "cdecl")
     HFFeatureHubFaceSearch.argtypes = [HFFaceFeature, HPFloat, PHFFaceFeatureIdentity]
     HFFeatureHubFaceSearch.restype = HResult
+
+if _libs[_LIBRARY_FILENAME].has("HFFeatureHubFaceSearchV2", "cdecl"):
+    HFFeatureHubFaceSearchV2 = _libs[_LIBRARY_FILENAME].get("HFFeatureHubFaceSearchV2", "cdecl")
+    HFFeatureHubFaceSearchV2.argtypes = [HFFaceFeature, PHFFeatureHubSearchResultV2]
+    HFFeatureHubFaceSearchV2.restype = HResult
 
 # /Users/tunm/work/InspireFace/cpp/inspireface/c_api/inspireface.h: 1067
 if _libs[_LIBRARY_FILENAME].has("HFFeatureHubFaceSearchTopK", "cdecl"):
@@ -2385,6 +2411,8 @@ HFFaceFeature = struct_HFFaceFeature# /Users/tunm/work/InspireFace/cpp/inspirefa
 HFFeatureHubConfiguration = struct_HFFeatureHubConfiguration# /Users/tunm/work/InspireFace/cpp/inspireface/c_api/inspireface.h: 916
 
 HFFaceFeatureIdentity = struct_HFFaceFeatureIdentity# /Users/tunm/work/InspireFace/cpp/inspireface/c_api/inspireface.h: 945
+
+HFFeatureHubSearchResultV2 = struct_HFFeatureHubSearchResultV2
 
 HFSearchTopKResults = struct_HFSearchTopKResults# /Users/tunm/work/InspireFace/cpp/inspireface/c_api/inspireface.h: 954
 

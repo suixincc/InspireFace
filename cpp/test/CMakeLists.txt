@@ -163,7 +163,7 @@ if(ISF_ENFORCE_CPP_API_TEST_COVERAGE)
             MultipleFacePipelineProcess GetRGBLivenessConfidence GetFaceMaskConfidence
             GetFaceQualityConfidence GetFaceInteractionState GetFaceInteractionAction
             GetFaceAttributeResult GetFaceEmotionResult
-            GetInstance EnableHub DisableHub GetAllIds SearchFaceFeature SearchFaceFeatureTopKCache
+            GetInstance EnableHub DisableHub GetAllIds SearchFaceFeature SearchFaceFeatureV2 SearchFaceFeatureTopKCache
             SearchFaceFeatureTopK FaceFeatureInsert FaceFeatureRemove FaceFeatureUpdate GetFaceFeature
             ViewDBTable SetRecognitionThreshold SetRecognitionSearchMode CosineSimilarity
             GetSearchFaceFeatureCache GetFaceFeaturePtrCache GetFaceFeatureCount

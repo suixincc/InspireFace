@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <limits>
 #include <vector>
 
@@ -87,6 +88,13 @@ TEST_CASE("C++ FeatureHub CRUD search and caches remain coherent", "[cpp_api][co
     CHECK(best.similarity == Approx(1.0).margin(1e-6));
     CHECK(best.feature == first);
     CHECK(hub->GetSearchFaceFeatureCache() == first);
+    bool found = false;
+    inspire::FaceSearchResult best_v2 = {};
+    REQUIRE(hub->SearchFaceFeatureV2(first, best_v2, found, true) == HSUCCEED);
+    REQUIRE(found);
+    CHECK(best_v2.id == best.id);
+    CHECK(best_v2.similarity == Approx(best.similarity).margin(1e-6));
+    CHECK(best_v2.feature == best.feature);
     CHECK(hub->SearchFaceFeature(std::vector<float>(511, 0.0f), best, true) == HERR_FT_HUB_INVALID_FEATURE);
     CHECK(cached_feature->data == nullptr);
     CHECK(cached_feature->dataSize == 0);
@@ -105,6 +113,14 @@ TEST_CASE("C++ FeatureHub CRUD search and caches remain coherent", "[cpp_api][co
     REQUIRE(hub->SearchFaceFeature(first, best, false) == HSUCCEED);
     CHECK(best.id == 10);
     CHECK(best.feature.empty());
+    const auto unknown = UnitFeature(7);
+    found = true;
+    best_v2 = {77, 8.0, first};
+    REQUIRE(hub->SearchFaceFeatureV2(unknown, best_v2, found, true) == HSUCCEED);
+    CHECK_FALSE(found);
+    CHECK(best_v2.id == INSPIRE_INVALID_ID);
+    CHECK(best_v2.similarity == Approx(-1.0));
+    CHECK(best_v2.feature.empty());
     CHECK(hub->ViewDBTable() == HSUCCEED);
 
     auto replacement = UnitFeature(2);
@@ -145,6 +161,8 @@ TEST_CASE("C++ FeatureHub rejects malformed inputs and clears outputs", "[cpp_ap
     CHECK(hub->FaceFeatureInsert(short_feature, 1, allocated_id) == HERR_FT_HUB_INVALID_FEATURE);
     CHECK(allocated_id == -1);
     CHECK(hub->FaceFeatureInsert(non_finite, 1, allocated_id) == HERR_FT_HUB_INVALID_FEATURE);
+    CHECK(hub->FaceFeatureInsert(valid, static_cast<int64_t>(INSPIRE_INVALID_ID), allocated_id) == HERR_INVALID_PARAM);
+    CHECK(allocated_id == INSPIRE_INVALID_ID);
 
     inspire::FaceSearchResult search = {44, 2.0, valid};
     CHECK(hub->SearchFaceFeature(short_feature, search) == HERR_FT_HUB_INVALID_FEATURE);
@@ -179,4 +197,54 @@ TEST_CASE("C++ FeatureHub public construction starts disabled", "[cpp_api][contr
     inspire::FeatureHubDB local;
     CHECK(local.GetFaceFeatureCount() == 0);
     CHECK(local.DisableHub() == HSUCCEED);
+}
+
+TEST_CASE("C++ FeatureHub preserves 32-bit overloads and supports 64-bit IDs", "[cpp_api][contract][feature_hub][abi][int64]") {
+    using Hub = inspire::FeatureHubDB;
+    using Insert32 = int32_t (Hub::*)(const std::vector<float>&, int32_t, int64_t&);
+    using Remove32 = int32_t (Hub::*)(int32_t);
+    using Update32 = int32_t (Hub::*)(const std::vector<float>&, int32_t);
+    using Get32 = int32_t (Hub::*)(int32_t);
+    using GetVector32 = int32_t (Hub::*)(int32_t, std::vector<float>&);
+    using GetEmbedding32 = int32_t (Hub::*)(int32_t, inspire::FaceEmbedding&);
+    const Insert32 legacy_insert = static_cast<Insert32>(&Hub::FaceFeatureInsert);
+    const Remove32 legacy_remove = static_cast<Remove32>(&Hub::FaceFeatureRemove);
+    const Update32 legacy_update = static_cast<Update32>(&Hub::FaceFeatureUpdate);
+    const Get32 legacy_get = static_cast<Get32>(&Hub::GetFaceFeature);
+    const GetVector32 legacy_get_vector = static_cast<GetVector32>(&Hub::GetFaceFeature);
+    const GetEmbedding32 legacy_get_embedding = static_cast<GetEmbedding32>(&Hub::GetFaceFeature);
+    REQUIRE(legacy_insert != nullptr);
+    REQUIRE(legacy_remove != nullptr);
+    REQUIRE(legacy_update != nullptr);
+    REQUIRE(legacy_get != nullptr);
+    REQUIRE(legacy_get_vector != nullptr);
+    REQUIRE(legacy_get_embedding != nullptr);
+
+    CppFeatureHubReset reset;
+    const auto hub = Hub::GetInstance();
+    REQUIRE(hub->EnableHub(MemoryConfiguration()) == HSUCCEED);
+
+    const int64_t wide_id = static_cast<int64_t>(std::numeric_limits<int32_t>::max()) + 17;
+    auto first = UnitFeature(21);
+    auto replacement = UnitFeature(22);
+    int64_t allocated_id = INSPIRE_INVALID_ID;
+    REQUIRE(hub->FaceFeatureInsert(first, wide_id, allocated_id) == HSUCCEED);
+    CHECK(allocated_id == wide_id);
+
+    std::vector<float> fetched;
+    REQUIRE(hub->GetFaceFeature(wide_id, fetched) == HSUCCEED);
+    CHECK(fetched == first);
+    REQUIRE(hub->FaceFeatureUpdate(replacement, wide_id) == HSUCCEED);
+    REQUIRE(hub->GetFaceFeature(wide_id, fetched) == HSUCCEED);
+    CHECK(fetched == replacement);
+
+    inspire::FaceSearchResult match = {};
+    bool found = false;
+    REQUIRE(hub->SearchFaceFeatureV2(replacement, match, found, false) == HSUCCEED);
+    REQUIRE(found);
+    CHECK(match.id == wide_id);
+    CHECK(match.feature.empty());
+
+    REQUIRE(hub->FaceFeatureRemove(wide_id) == HSUCCEED);
+    CHECK(hub->GetFaceFeature(wide_id, fetched) == HERR_FT_HUB_NOT_FOUND_FEATURE);
 }

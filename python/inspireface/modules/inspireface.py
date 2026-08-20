@@ -21,6 +21,8 @@ from .exception import (
 IGNORE_VERIFICATION_OF_THE_LATEST_MODEL = False
 
 _INT32_MAX = (1 << 31) - 1
+_INT64_MIN = -(1 << 63)
+_INT64_MAX = (1 << 63) - 1
 _PACKED_STREAM_CHANNELS = {
     HF_STREAM_RGB: 3,
     HF_STREAM_BGR: 3,
@@ -55,6 +57,23 @@ def _normalize_int32(value, name, positive=False):
         raise InvalidInputError(
             f"{name} must be {qualifier}",
             errcode.HERR_INVALID_IMAGE_STREAM_PARAM,
+            **{name: normalized}
+        )
+    return normalized
+
+
+def _normalize_face_id(value, name="custom_id"):
+    if isinstance(value, (bool, np.bool_)) or not isinstance(value, (int, np.integer)):
+        raise InvalidInputError(
+            f"{name} must be an integer",
+            errcode.HERR_INVALID_PARAM,
+            **{name: value}
+        )
+    normalized = int(value)
+    if normalized < _INT64_MIN or normalized > _INT64_MAX:
+        raise InvalidInputError(
+            f"{name} must be a signed 64-bit integer",
+            errcode.HERR_INVALID_PARAM,
             **{name: normalized}
         )
     return normalized
@@ -1353,9 +1372,10 @@ class FaceIdentity(object):
             data (np.ndarray): The facial feature data.
             id (int): A custom identifier for tracking or referencing the face identity.
         """
-        validate_feature_data(data, "FaceIdentity initialization", allow_empty=(id == -1))
+        normalized_id = _normalize_face_id(id, "id")
+        validate_feature_data(data, "FaceIdentity initialization", allow_empty=(normalized_id == HF_INVALID_FACE_ID))
         self.feature = data.copy()
-        self.id = id
+        self.id = normalized_id
 
     def __repr__(self) -> str:
         return f"FaceIdentity(id={self.id}, feature={self.feature})"
@@ -1441,9 +1461,19 @@ class SearchResult:
     """
     confidence: float
     similar_identity: FaceIdentity
+    matched: bool = None
+
+    def __post_init__(self):
+        if self.matched is None:
+            self.matched = self.similar_identity.id != HF_INVALID_FACE_ID
+        else:
+            self.matched = bool(self.matched)
 
     def __repr__(self) -> str:
-        return f"SearchResult(confidence={self.confidence}, similar_identity={self.similar_identity})"
+        return (
+            f"SearchResult(confidence={self.confidence}, "
+            f"similar_identity={self.similar_identity}, matched={self.matched})"
+        )
 
 def feature_hub_face_search(data: np.ndarray) -> SearchResult:
     """
@@ -1457,17 +1487,33 @@ def feature_hub_face_search(data: np.ndarray) -> SearchResult:
     """
     validate_feature_data(data, "FeatureHub face search")
     feature = HFFaceFeature(size=HInt32(data.size), data=data.ctypes.data_as(HPFloat))
-    confidence = HFloat()
-    most_similar = HFFaceFeatureIdentity()
-    ret = HFFeatureHubFaceSearch(feature, HPFloat(confidence), PHFFaceFeatureIdentity(most_similar))
+    native_result = HFFeatureHubSearchResultV2()
+    ret = HFFeatureHubFaceSearchV2(feature, PHFFeatureHubSearchResultV2(native_result))
     check_error(ret, "Search face in FeatureHub")
-    
-    if most_similar.id != -1:
-        search_identity = FaceIdentity.from_ctypes(most_similar)
-        return SearchResult(confidence=confidence.value, similar_identity=search_identity)
-    else:
-        none = FaceIdentity(np.zeros(0, dtype=np.float32), most_similar.id)
-        return SearchResult(confidence=confidence.value, similar_identity=none)
+    if native_result.found not in (0, 1):
+        raise ProcessingError(
+            "FeatureHub search returned an invalid match flag",
+            errcode.HERR_FT_HUB_INVALID_FEATURE,
+            found=native_result.found,
+        )
+    if native_result.found:
+        native_identity = HFFaceFeatureIdentity(
+            id=native_result.id,
+            feature=PHFFaceFeature(native_result.feature),
+        )
+        search_identity = FaceIdentity.from_ctypes(native_identity)
+        return SearchResult(
+            confidence=float(native_result.confidence),
+            similar_identity=search_identity,
+            matched=True,
+        )
+
+    none = FaceIdentity(np.zeros(0, dtype=np.float32), HF_INVALID_FACE_ID)
+    return SearchResult(
+        confidence=float(native_result.confidence),
+        similar_identity=none,
+        matched=False,
+    )
 
 
 def feature_hub_face_search_top_k(data: np.ndarray, top_k: int) -> List[Tuple]:
@@ -1545,6 +1591,7 @@ def feature_hub_face_remove(custom_id: int) -> bool:
     Notes:
         Logs an error if the removal operation fails.
     """
+    custom_id = _normalize_face_id(custom_id)
     ret = HFFeatureHubFaceRemove(HFaceId(custom_id))
     check_error(ret, "Remove face feature from FeatureHub", custom_id=custom_id)
     return True
@@ -1563,6 +1610,7 @@ def feature_hub_get_face_identity(custom_id: int):
     Notes:
         Logs an error if retrieving the face identity fails.
     """
+    custom_id = _normalize_face_id(custom_id)
     identify = HFFaceFeatureIdentity()
     ret = HFFeatureHubGetFaceIdentity(HFaceId(custom_id), PHFFaceFeatureIdentity(identify))
     check_error(ret, "Get face identity from FeatureHub", custom_id=custom_id)

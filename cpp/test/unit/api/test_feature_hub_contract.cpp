@@ -86,6 +86,15 @@ TEST_CASE("C API FeatureHub state machine and CRUD are deterministic", "[api][co
     CHECK(match.id == 42);
     CHECK(confidence == Approx(1.0f).margin(1e-6f));
 
+    HFFeatureHubSearchResultV2 match_v2 = {};
+    REQUIRE(HFFeatureHubFaceSearchV2(first_view, &match_v2) == HSUCCEED);
+    REQUIRE(match_v2.found == 1);
+    CHECK(match_v2.id == 42);
+    CHECK(match_v2.confidence == Approx(1.0f).margin(1e-6f));
+    REQUIRE(match_v2.feature.size == 512);
+    REQUIRE(match_v2.feature.data != nullptr);
+    CHECK(std::equal(first.begin(), first.end(), match_v2.feature.data));
+
     REQUIRE(HFFeatureHubFaceSearchThresholdSetting(1.0f) == HSUCCEED);
     match = {7, reinterpret_cast<PHFFaceFeature>(static_cast<uintptr_t>(1))};
     confidence = 7.0f;
@@ -93,6 +102,13 @@ TEST_CASE("C API FeatureHub state machine and CRUD are deterministic", "[api][co
     CHECK(match.id == -1);
     CHECK(match.feature == nullptr);
     CHECK(confidence == -1.0f);
+    match_v2 = {7, 8, 9.0f, {10, reinterpret_cast<HPFloat>(static_cast<uintptr_t>(1))}};
+    REQUIRE(HFFeatureHubFaceSearchV2(second_view, &match_v2) == HSUCCEED);
+    CHECK(match_v2.found == 0);
+    CHECK(match_v2.id == HF_INVALID_FACE_ID);
+    CHECK(match_v2.confidence == -1.0f);
+    CHECK(match_v2.feature.size == 0);
+    CHECK(match_v2.feature.data == nullptr);
     REQUIRE(HFFeatureHubFaceSearchThresholdSetting(-1.0f) == HSUCCEED);
 
     HFSearchTopKResults top_k = {};
@@ -168,9 +184,9 @@ TEST_CASE("C API FeatureHub validates configuration, vector contents, IDs, and o
     id = 77;
     CHECK(HFFeatureHubInsertFeature({1, &oversized_view}, &id) == HERR_FT_HUB_INVALID_FEATURE);
     CHECK(id == -1);
-    CHECK(HFFeatureHubInsertFeature({std::numeric_limits<int64_t>::max(), &valid_view}, &id) == HERR_INVALID_PARAM);
-    CHECK(HFFeatureHubFaceUpdate({std::numeric_limits<int64_t>::min(), &valid_view}) == HERR_INVALID_PARAM);
-    CHECK(HFFeatureHubFaceRemove(std::numeric_limits<int64_t>::max()) == HERR_INVALID_PARAM);
+    id = 77;
+    CHECK(HFFeatureHubInsertFeature({HF_INVALID_FACE_ID, &valid_view}, &id) == HERR_INVALID_PARAM);
+    CHECK(id == HF_INVALID_FACE_ID);
 
     float confidence = 4.0f;
     HFFaceFeatureIdentity match = {7, nullptr};
@@ -178,6 +194,15 @@ TEST_CASE("C API FeatureHub validates configuration, vector contents, IDs, and o
     CHECK(HFFeatureHubFaceSearch(oversized_view, &confidence, &match) == HERR_FT_HUB_INVALID_FEATURE);
     CHECK(HFFeatureHubFaceSearch(valid_view, nullptr, &match) == HERR_INVALID_PARAM);
     CHECK(HFFeatureHubFaceSearch(valid_view, &confidence, nullptr) == HERR_INVALID_PARAM);
+
+    HFFeatureHubSearchResultV2 match_v2 = {1, 7, 4.0f, {2, reinterpret_cast<HPFloat>(static_cast<uintptr_t>(1))}};
+    CHECK(HFFeatureHubFaceSearchV2(valid_view, nullptr) == HERR_INVALID_PARAM);
+    CHECK(HFFeatureHubFaceSearchV2(short_view, &match_v2) == HERR_FT_HUB_INVALID_FEATURE);
+    CHECK(match_v2.found == 0);
+    CHECK(match_v2.id == HF_INVALID_FACE_ID);
+    CHECK(match_v2.confidence == -1.0f);
+    CHECK(match_v2.feature.size == 0);
+    CHECK(match_v2.feature.data == nullptr);
 
     HFSearchTopKResults top_k = {7, reinterpret_cast<float*>(1), reinterpret_cast<HFaceId*>(1)};
     CHECK(HFFeatureHubFaceSearchTopK(valid_view, 0, &top_k) == HERR_INVALID_PARAM);
@@ -203,8 +228,67 @@ TEST_CASE("C API FeatureHub auto IDs remain unique", "[api][contract][feature_hu
     HFFaceFeature second_view = View(second);
     HFaceId first_id = -1;
     HFaceId second_id = -1;
-    REQUIRE(HFFeatureHubInsertFeature({999, &first_view}, &first_id) == HSUCCEED);
-    REQUIRE(HFFeatureHubInsertFeature({999, &second_view}, &second_id) == HSUCCEED);
+    REQUIRE(HFFeatureHubInsertFeature({HF_INVALID_FACE_ID, &first_view}, &first_id) == HSUCCEED);
+    REQUIRE(HFFeatureHubInsertFeature({HF_INVALID_FACE_ID, &second_view}, &second_id) == HSUCCEED);
     CHECK(first_id >= 0);
     CHECK(second_id > first_id);
+}
+
+TEST_CASE("C API FeatureHub supports signed 64-bit IDs", "[api][contract][feature_hub][int64]") {
+    FeatureHubReset reset;
+    REQUIRE(HFFeatureHubDataEnable(MemoryConfiguration()) == HSUCCEED);
+
+    const HFaceId positive_id = static_cast<HFaceId>(std::numeric_limits<int32_t>::max()) + 17;
+    const HFaceId negative_id = static_cast<HFaceId>(std::numeric_limits<int32_t>::min()) - 17;
+    auto first = UnitFeature(11);
+    auto second = UnitFeature(12);
+    auto replacement = UnitFeature(13);
+    HFFaceFeature first_view = View(first);
+    HFFaceFeature second_view = View(second);
+    HFFaceFeature replacement_view = View(replacement);
+    HFaceId allocated_id = HF_INVALID_FACE_ID;
+
+    REQUIRE(HFFeatureHubInsertFeature({positive_id, &first_view}, &allocated_id) == HSUCCEED);
+    CHECK(allocated_id == positive_id);
+    REQUIRE(HFFeatureHubInsertFeature({negative_id, &second_view}, &allocated_id) == HSUCCEED);
+    CHECK(allocated_id == negative_id);
+
+    HFFaceFeatureIdentity fetched = {};
+    REQUIRE(HFFeatureHubGetFaceIdentity(positive_id, &fetched) == HSUCCEED);
+    CHECK(fetched.id == positive_id);
+    REQUIRE(fetched.feature != nullptr);
+    CHECK(std::equal(first.begin(), first.end(), fetched.feature->data));
+
+    HFFeatureHubSearchResultV2 match_v2 = {};
+    REQUIRE(HFFeatureHubFaceSearchV2(first_view, &match_v2) == HSUCCEED);
+    REQUIRE(match_v2.found == 1);
+    CHECK(match_v2.id == positive_id);
+    CHECK(match_v2.confidence == Approx(1.0f).margin(1e-6f));
+
+    float confidence = -1.0f;
+    HFFaceFeatureIdentity legacy_match = {};
+    REQUIRE(HFFeatureHubFaceSearch(first_view, &confidence, &legacy_match) == HSUCCEED);
+    CHECK(legacy_match.id == positive_id);
+    CHECK(confidence == Approx(match_v2.confidence).margin(1e-6f));
+
+    HFSearchTopKResults top_k = {};
+    REQUIRE(HFFeatureHubFaceSearchTopK(second_view, 2, &top_k) == HSUCCEED);
+    REQUIRE(top_k.size == 2);
+    CHECK(top_k.ids[0] == negative_id);
+
+    REQUIRE(HFFeatureHubFaceUpdate({positive_id, &replacement_view}) == HSUCCEED);
+    REQUIRE(HFFeatureHubGetFaceIdentity(positive_id, &fetched) == HSUCCEED);
+    CHECK(std::equal(replacement.begin(), replacement.end(), fetched.feature->data));
+
+    HFFeatureHubExistingIds ids = {};
+    REQUIRE(HFFeatureHubGetExistingIds(&ids) == HSUCCEED);
+    REQUIRE(ids.size == 2);
+    std::vector<HFaceId> actual_ids(ids.ids, ids.ids + ids.size);
+    std::sort(actual_ids.begin(), actual_ids.end());
+    std::vector<HFaceId> expected_ids = {negative_id, positive_id};
+    std::sort(expected_ids.begin(), expected_ids.end());
+    CHECK(actual_ids == expected_ids);
+
+    CHECK(HFFeatureHubFaceRemove(positive_id) == HSUCCEED);
+    CHECK(HFFeatureHubFaceRemove(negative_id) == HSUCCEED);
 }

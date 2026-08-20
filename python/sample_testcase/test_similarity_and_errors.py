@@ -74,6 +74,17 @@ class ErrorContractCase(NativeResourceCaseMixin, unittest.TestCase):
             with self.assertRaises(InvalidInputError):
                 ifac.feature_comparison(feature, valid)
 
+    def test_feature_hub_ids_require_signed_64_bit_integers(self):
+        feature = np.ones(512, dtype=np.float32)
+        for invalid_id in (True, 1.5, "1", 1 << 63, -(1 << 63) - 1):
+            with self.subTest(invalid_id=invalid_id):
+                with self.assertRaises(InvalidInputError):
+                    ifac.FaceIdentity(feature, invalid_id)
+        with self.assertRaises(InvalidInputError):
+            ifac.feature_hub_face_remove(False)
+        with self.assertRaises(InvalidInputError):
+            ifac.feature_hub_get_face_identity("1")
+
     def test_feature_hub_top_k_reports_disabled_hub(self):
         disabled_operations = (
             lambda: ifac.feature_hub_face_search_top_k(

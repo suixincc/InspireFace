@@ -1633,9 +1633,6 @@ HResult HFFeatureHubInsertFeature(HFFaceFeatureIdentity featureIdentity, HPFaceI
     if (featureIdentity.feature->size != FACE_FEATURE_SIZE) {
         return HERR_FT_HUB_INVALID_FEATURE;
     }
-    if (featureIdentity.id < std::numeric_limits<int32_t>::min() || featureIdentity.id > std::numeric_limits<int32_t>::max()) {
-        return HERR_INVALID_PARAM;
-    }
     std::vector<float> feat;
     feat.reserve(featureIdentity.feature->size);
     for (int i = 0; i < featureIdentity.feature->size; ++i) {
@@ -1650,36 +1647,62 @@ HResult HFFeatureHubFaceSearch(HFFaceFeature searchFeature, HPFloat confidence, 
     if (confidence == nullptr || mostSimilar == nullptr) {
         return HERR_INVALID_PARAM;
     }
+    *confidence = -1.0f;
+    mostSimilar->id = HF_INVALID_FACE_ID;
+    mostSimilar->feature = nullptr;
+
+    HFFeatureHubSearchResultV2 result = {};
+    const HResult ret = HFFeatureHubFaceSearchV2(searchFeature, &result);
+    if (ret != HSUCCEED) {
+        return ret;
+    }
+
+    // Preserve the legacy sentinel contract even for a persisted record whose
+    // row ID is -1. V2 callers can distinguish that record using `found`.
+    if (result.found && result.id != HF_INVALID_FACE_ID) {
+        static thread_local HFFaceFeature legacy_feature_view = {0, nullptr};
+        legacy_feature_view = result.feature;
+        mostSimilar->id = result.id;
+        mostSimilar->feature = &legacy_feature_view;
+        *confidence = result.confidence;
+    }
+    return HSUCCEED;
+}
+
+HResult HFFeatureHubFaceSearchV2(HFFaceFeature searchFeature, PHFFeatureHubSearchResultV2 result) {
+    if (result == nullptr) {
+        return HERR_INVALID_PARAM;
+    }
+    result->found = 0;
+    result->id = HF_INVALID_FACE_ID;
+    result->confidence = -1.0f;
+    result->feature = {0, nullptr};
+
+    static thread_local std::vector<float> result_feature;
+    result_feature.clear();
     if (searchFeature.data == nullptr) {
         return HERR_INVALID_FACE_FEATURE;
     }
     if (searchFeature.size != FACE_FEATURE_SIZE) {
         return HERR_FT_HUB_INVALID_FEATURE;
     }
-    std::vector<float> feat;
-    feat.reserve(searchFeature.size);
-    for (int i = 0; i < searchFeature.size; ++i) {
-        feat.push_back(searchFeature.data[i]);
-    }
-    *confidence = -1.0f;
-    mostSimilar->id = -1;
-    mostSimilar->feature = nullptr;
-    inspire::FaceSearchResult result{-1, -1.0, {}};
-    HInt32 ret = INSPIREFACE_FEATURE_HUB->SearchFaceFeature(feat, result);
+    std::vector<float> feat(searchFeature.data, searchFeature.data + searchFeature.size);
+    inspire::FaceSearchResult search_result{HF_INVALID_FACE_ID, -1.0, {}};
+    bool found = false;
+    const HResult ret = INSPIREFACE_FEATURE_HUB->SearchFaceFeatureV2(feat, search_result, found, true);
     if (ret != HSUCCEED) {
         return ret;
     }
-
-    static thread_local std::vector<float> result_feature;
-    static thread_local HFFaceFeature result_feature_view = {0, nullptr};
-    result_feature = std::move(result.feature);
-    result_feature_view.data = result_feature.empty() ? nullptr : result_feature.data();
-    result_feature_view.size = static_cast<HInt32>(result_feature.size());
-    mostSimilar->id = result.id;
-    if (mostSimilar->id != -1) {
-        mostSimilar->feature = &result_feature_view;
-        *confidence = static_cast<HFloat>(result.similarity);
+    if (!found) {
+        return HSUCCEED;
     }
+
+    result_feature = std::move(search_result.feature);
+    result->found = 1;
+    result->id = search_result.id;
+    result->confidence = static_cast<HFloat>(search_result.similarity);
+    result->feature.size = static_cast<HInt32>(result_feature.size());
+    result->feature.data = result_feature.empty() ? nullptr : result_feature.data();
     return HSUCCEED;
 }
 
@@ -1724,9 +1747,6 @@ HResult HFFeatureHubFaceSearchTopK(HFFaceFeature searchFeature, HInt32 topK, PHF
 }
 
 HResult HFFeatureHubFaceRemove(HFaceId id) {
-    if (id < std::numeric_limits<int32_t>::min() || id > std::numeric_limits<int32_t>::max()) {
-        return HERR_INVALID_PARAM;
-    }
     auto ret = INSPIREFACE_FEATURE_HUB->FaceFeatureRemove(id);
     return ret;
 }
@@ -1737,9 +1757,6 @@ HResult HFFeatureHubFaceUpdate(HFFaceFeatureIdentity featureIdentity) {
     }
     if (featureIdentity.feature->size != FACE_FEATURE_SIZE) {
         return HERR_FT_HUB_INVALID_FEATURE;
-    }
-    if (featureIdentity.id < std::numeric_limits<int32_t>::min() || featureIdentity.id > std::numeric_limits<int32_t>::max()) {
-        return HERR_INVALID_PARAM;
     }
     std::vector<float> feat;
     feat.reserve(featureIdentity.feature->size);
@@ -1758,9 +1775,6 @@ HResult HFFeatureHubGetFaceIdentity(HFaceId id, PHFFaceFeatureIdentity identity)
     }
     identity->id = -1;
     identity->feature = nullptr;
-    if (id < std::numeric_limits<int32_t>::min() || id > std::numeric_limits<int32_t>::max()) {
-        return HERR_INVALID_PARAM;
-    }
     static thread_local std::vector<float> feature_cache;
     static thread_local HFFaceFeature feature_view = {0, nullptr};
     auto ret = INSPIREFACE_FEATURE_HUB->GetFaceFeature(id, feature_cache);
@@ -2065,6 +2079,10 @@ HResult HFFeatureHubGetExistingIds(PHFFeatureHubExistingIds ids) {
     static thread_local std::vector<int64_t> id_cache;
     auto ret = INSPIREFACE_FEATURE_HUB->GetAllIds(id_cache);
     if (ret == HSUCCEED) {
+        if (id_cache.size() > static_cast<size_t>(std::numeric_limits<HInt32>::max())) {
+            id_cache.clear();
+            return HERR_FT_HUB_DATABASE_FAILURE;
+        }
         ids->size = static_cast<HInt32>(id_cache.size());
         ids->ids = id_cache.empty() ? nullptr : id_cache.data();
     }
