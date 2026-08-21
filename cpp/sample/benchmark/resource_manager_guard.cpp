@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
+#include <memory>
 #include <numeric>
 #include <string>
 #include <thread>
@@ -159,6 +160,23 @@ void TestManagerSemantics(const Options &options, Guard &guard) {
     guard.Expect(manager->releaseStream(low_handle + 1), "synthetic stream release failed");
     guard.Expect(manager->releaseImageBitmap(low_handle + 2), "synthetic bitmap release failed");
     guard.Expect(manager->releaseFaceFeature(low_handle + 3), "synthetic feature release failed");
+
+    const uintptr_t owned_handle = high_handle + 0x100u;
+    int destruction_count = 0;
+    std::shared_ptr<void> owner(new uint8_t(0), [&](void *object) {
+        delete static_cast<uint8_t *>(object);
+        ++destruction_count;
+    });
+    guard.Expect(manager->createSession(owned_handle, owner), "owned session registration failed");
+    owner.reset();
+    auto lease = manager->acquireSession(owned_handle);
+    guard.Expect(static_cast<bool>(lease), "live owned session could not be leased");
+    guard.Expect(!manager->acquireStream(owned_handle), "session handle acquired through the stream registry");
+    guard.Expect(manager->releaseSession(owned_handle), "leased session release failed");
+    guard.Expect(!manager->isSessionLive(owned_handle), "released leased session remained publicly live");
+    guard.Expect(destruction_count == 0, "release destroyed an object while a call lease was active");
+    lease = {};
+    guard.Expect(destruction_count == 1, "final lease did not destroy the released object exactly once");
 }
 
 void TestCApiBasicLifecycle(Guard &guard) {

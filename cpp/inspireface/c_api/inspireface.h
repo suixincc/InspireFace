@@ -39,6 +39,37 @@ extern "C" {
 #define HF_ENABLE_FACE_POSE 0x00000200         ///< Flag to enable face pose estimation feature.
 #define HF_ENABLE_FACE_EMOTION 0x00000400      ///< Flag to enable face emotion recognition feature.
 
+/** Current additive C API level. Existing level-1 declarations remain ABI compatible. */
+#define HF_C_API_LEVEL 2U
+
+/** Initial version of HFSessionConfigV2. */
+#define HF_SESSION_CONFIG_V2_VERSION 1U
+
+/** Initial version of HFResourcePackInfo. */
+#define HF_RESOURCE_PACK_INFO_VERSION 1U
+
+#define HF_RESOURCE_PACK_TAG_CAPACITY 64U
+#define HF_RESOURCE_PACK_VERSION_CAPACITY 64U
+#define HF_RESOURCE_PACK_MAJOR_CAPACITY 64U
+#define HF_RESOURCE_PACK_RELEASE_CAPACITY 64U
+
+/**
+ * @brief Copy a human-readable description for an InspireFace result code.
+ *
+ * The descriptions are diagnostic text and are not stable identifiers. Programs
+ * must continue to make decisions using the numeric HResult value. Pass
+ * buffer=NULL and bufferSize=0 to query the required size, including the null
+ * terminator. Unknown numeric values are described as an unknown error code.
+ *
+ * @param errorCode Result code to describe.
+ * @param buffer Destination buffer, or NULL for a size query.
+ * @param bufferSize Destination capacity in bytes, including the null terminator.
+ * @param requiredSize Receives the required capacity in bytes.
+ * @return HSUCCEED, HERR_INVALID_PARAM, or HERR_INVALID_BUFFER_SIZE.
+ */
+HYPER_CAPI_EXPORT extern HResult HFGetErrorMessage(HResult errorCode, HString buffer, HInt32 bufferSize,
+                                                   HPInt32 requiredSize);
+
 /************************************************************************
  * Image Stream Function
  *
@@ -321,6 +352,39 @@ HYPER_CAPI_EXPORT extern HResult HFImageBitmapShow(HFImageBitmap handle, HString
  ************************************************************************/
 
 /**
+ * @brief Metadata returned by HFValidateResourcePack.
+ *
+ * Initialize the structure to zero, set structSize to sizeof(HFResourcePackInfo),
+ * and set structVersion to HF_RESOURCE_PACK_INFO_VERSION. The text fields are
+ * null terminated. Reserved fields are always returned as zero.
+ */
+typedef struct HFResourcePackInfo {
+    HFUInt32 structSize;
+    HFUInt32 structVersion;
+    HFUInt32 archiveFileCount;
+    HFUInt32 modelCount;
+    HChar tag[HF_RESOURCE_PACK_TAG_CAPACITY];
+    HChar version[HF_RESOURCE_PACK_VERSION_CAPACITY];
+    HChar major[HF_RESOURCE_PACK_MAJOR_CAPACITY];
+    HChar releaseDate[HF_RESOURCE_PACK_RELEASE_CAPACITY];
+    HFUInt64 reserved[8];
+} HFResourcePackInfo, *PHFResourcePackInfo;
+
+/**
+ * @brief Validate a resource pack without changing the SDK launch state.
+ *
+ * Validation scans the archive, parses its manifest, verifies every declared
+ * model configuration and payload, and rejects inference engines unavailable in
+ * the current SDK build. It does not initialize inference engines. Pass info=NULL
+ * when metadata is not required.
+ *
+ * @param resourcePath Path to the resource-pack archive.
+ * @param info Optional caller-owned metadata structure.
+ * @return HSUCCEED or an archive, unsupported, or parameter error.
+ */
+HYPER_CAPI_EXPORT extern HFStatus HFValidateResourcePack(HPath resourcePath, PHFResourcePackInfo info);
+
+/**
  * @brief Launch InspireFace SDK
  * Start the InspireFace SDK at the initialization stage of your program, as it is global and
  * designed to be used only once. It serves as a prerequisite for other function interfaces, so it
@@ -510,6 +574,24 @@ typedef enum HFDetectMode {
 } HFDetectMode;
 
 /**
+ * @brief Fixed-layout session configuration for C API level 2.
+ *
+ * Initialize the structure to zero, then set structSize to sizeof(HFSessionConfigV2)
+ * and structVersion to HF_SESSION_CONFIG_V2_VERSION. Reserved fields must remain
+ * zero. A larger structSize is accepted so future versions can append fields.
+ */
+typedef struct HFSessionConfigV2 {
+    HFUInt32 structSize;              ///< Size of the caller's structure in bytes.
+    HFUInt32 structVersion;           ///< Must be HF_SESSION_CONFIG_V2_VERSION.
+    HFUInt64 featureMask;             ///< Combination of HF_ENABLE_* flags.
+    HInt32 detectMode;                ///< One of HFDetectMode.
+    HInt32 maxDetectFaceNum;          ///< Maximum number of faces to detect; must be positive.
+    HInt32 detectPixelLevel;          ///< Detector input level, or -1 for the default.
+    HInt32 trackByDetectModeFPS;      ///< Tracking FPS, or -1 for the default.
+    HFUInt32 reserved[8];             ///< Reserved for future use; initialize to zero.
+} HFSessionConfigV2, *PHFSessionConfigV2;
+
+/**
  * @brief Enum for landmark engine.
  */
 typedef enum HFSessionLandmarkEngine {
@@ -574,6 +656,15 @@ HYPER_CAPI_EXPORT extern HResult HFCreateInspireFaceSession(HFSessionCustomParam
  */
 HYPER_CAPI_EXPORT extern HResult HFCreateInspireFaceSessionOptional(HOption customOption, HFDetectMode detectMode, HInt32 maxDetectFaceNum,
                                                                     HInt32 detectPixelLevel, HInt32 trackByDetectModeFPS, PHFSession handle);
+
+/**
+ * @brief Create a session through the fixed-layout C API level-2 contract.
+ *
+ * This function is additive. The two level-1 session creation functions above
+ * retain their original declarations, structure layout, and exported symbols.
+ * Unknown or unavailable feature bits return HERR_UNSUPPORTED.
+ */
+HYPER_CAPI_EXPORT extern HFStatus HFCreateInspireFaceSessionV2(const HFSessionConfigV2* config, PHFSession handle);
 
 /**
  * @brief Release the session.
@@ -732,6 +823,29 @@ HYPER_CAPI_EXPORT extern HResult HFSessionSetLandmarkAugmentationNum(HFSession s
  * @return HResult indicating the success or failure of the operation.
  */
 HYPER_CAPI_EXPORT extern HResult HFExecuteFaceTrack(HFSession session, HFImageStream streamHandle, PHFMultipleFaceData results);
+
+/**
+ * @brief Run face tracking and return an independently owned result snapshot.
+ *
+ * Unlike HFExecuteFaceTrack, the snapshot is not invalidated by later calls on
+ * the session or by releasing the session and image stream. Release it with
+ * HFReleaseFaceResultSnapshot.
+ */
+HYPER_CAPI_EXPORT extern HResult HFExecuteFaceTrackSnapshot(HFSession session, HFImageStream streamHandle,
+                                                            PHFFaceResultSnapshot snapshot);
+
+/**
+ * @brief Get a borrowed view of an owned face result snapshot.
+ *
+ * The returned pointers remain valid until HFReleaseFaceResultSnapshot is
+ * called for the snapshot. The caller must not modify or free those pointers.
+ */
+HYPER_CAPI_EXPORT extern HResult HFGetFaceResultSnapshotData(HFFaceResultSnapshot snapshot, PHFMultipleFaceData results);
+
+/**
+ * @brief Release an owned face result snapshot.
+ */
+HYPER_CAPI_EXPORT extern HResult HFReleaseFaceResultSnapshot(HFFaceResultSnapshot snapshot);
 
 /**
  * @brief Gets the size of the debug preview image for the last face detection in the session.
@@ -1408,6 +1522,12 @@ typedef struct HFInspireFaceVersion {
  * @return HResult indicating the success or failure of the operation.
  */
 HYPER_CAPI_EXPORT extern HResult HFQueryInspireFaceVersion(PHFInspireFaceVersion version);
+
+/**
+ * @brief Query the highest C API level implemented by the loaded library.
+ * @param apiLevel Receives HF_C_API_LEVEL.
+ */
+HYPER_CAPI_EXPORT extern HFStatus HFQueryCAPILevel(HFUInt32* apiLevel);
 
 /**
  * @brief Components whose build-time versions can be queried.

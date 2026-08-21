@@ -9,11 +9,13 @@ import numpy as np
 
 import inspireface as ifac
 from inspireface.modules import inspireface as api_module
+from inspireface.modules import herror as errcode
 from inspireface.modules.core import native
 from inspireface.modules.core._library_path import get_lib_path, platform_library_spec
 from inspireface.modules.exception import (
     ProcessingError,
     SystemNotReadyError,
+    UnsupportedError,
     handle_c_api_errors,
 )
 
@@ -49,6 +51,11 @@ class PublicPackageContractCase(unittest.TestCase):
         self.assertEqual(ifac.__native_version__, ifac.version())
         self.assertIs(ifac.native_version, ifac.version)
 
+    def test_c_api_level_falls_back_for_legacy_native_libraries(self):
+        self.assertEqual(ifac.c_api_level(), 2)
+        with patch.dict(api_module.__dict__, {"HFQueryCAPILevel": None}):
+            self.assertEqual(api_module.c_api_level(), 1)
+
     def test_face_identity_repr_is_bounded(self):
         identity = ifac.FaceIdentity(np.arange(512, dtype=np.float32), 42)
         representation = repr(identity)
@@ -56,6 +63,25 @@ class PublicPackageContractCase(unittest.TestCase):
         self.assertIn("shape=(512,)", representation)
         self.assertLess(len(representation), 120)
         self.assertEqual(identity.custom_id, identity.id)
+
+    def test_launch_and_reload_preflight_new_native_but_preserve_legacy_loading(self):
+        with patch.object(api_module, "validate_resource_pack") as validate, patch.object(
+            api_module, "HFLaunchInspireFace", return_value=errcode.HSUCCEED
+        ), patch.object(api_module, "HFReloadInspireFace", return_value=errcode.HSUCCEED):
+            self.assertTrue(api_module.launch(resource_path="/model.pack"))
+            self.assertTrue(api_module.reload(resource_path="/model.pack"))
+        self.assertEqual(validate.call_count, 2)
+        validate.assert_any_call("/model.pack")
+
+        with patch.dict(api_module.__dict__, {"HFValidateResourcePack": None}), patch.object(
+            api_module, "validate_resource_pack"
+        ) as validate, patch.object(api_module, "HFLaunchInspireFace", return_value=errcode.HSUCCEED):
+            self.assertTrue(api_module.launch(resource_path="/legacy-model.pack"))
+        validate.assert_not_called()
+
+        with patch.dict(api_module.__dict__, {"HFValidateResourcePack": None}):
+            with self.assertRaises(UnsupportedError):
+                api_module.validate_resource_pack("/legacy-model.pack")
 
 
 class ExceptionBoundaryContractCase(unittest.TestCase):
@@ -96,6 +122,57 @@ class NativePlatformContractCase(unittest.TestCase):
         self.assertTrue(hasattr(native, "add_library_search_dirs"))
         self.assertTrue(hasattr(native, "HFCreateInspireFaceSession"))
         self.assertTrue(hasattr(native, "HFFaceBasicToken"))
+        self.assertTrue(hasattr(native, "HFCreateInspireFaceSessionV2"))
+        self.assertTrue(hasattr(native, "HFQueryCAPILevel"))
+        self.assertTrue(hasattr(native, "HFExecuteFaceTrackSnapshot"))
+        self.assertTrue(hasattr(native, "HFGetFaceResultSnapshotData"))
+        self.assertTrue(hasattr(native, "HFReleaseFaceResultSnapshot"))
+        self.assertTrue(hasattr(native, "HFGetErrorMessage"))
+        self.assertTrue(hasattr(native, "HFValidateResourcePack"))
+
+    def test_native_error_message_uses_caller_owned_storage(self):
+        required_size = native.HInt32()
+        self.assertEqual(
+            native.HFGetErrorMessage(
+                native.HResult(errcode.HERR_INVALID_PARAM),
+                None,
+                0,
+                ctypes.byref(required_size),
+            ),
+            errcode.HSUCCEED,
+        )
+        self.assertGreater(required_size.value, 1)
+
+        buffer = ctypes.create_string_buffer(required_size.value)
+        copied_size = native.HInt32()
+        self.assertEqual(
+            native.HFGetErrorMessage(
+                native.HResult(errcode.HERR_INVALID_PARAM),
+                buffer,
+                len(buffer),
+                ctypes.byref(copied_size),
+            ),
+            errcode.HSUCCEED,
+        )
+        self.assertEqual(copied_size.value, required_size.value)
+        self.assertIn("parameter", buffer.value.decode("utf-8").lower())
+
+    def test_level_two_ctypes_layout_is_fixed_width(self):
+        self.assertEqual(ctypes.sizeof(native.HFStatus), 4)
+        self.assertEqual(ctypes.sizeof(native.HFUInt32), 4)
+        self.assertEqual(ctypes.sizeof(native.HFUInt64), 8)
+        self.assertEqual(ctypes.sizeof(native.HFSessionConfigV2), 64)
+        self.assertEqual(native.HFSessionConfigV2.structSize.offset, 0)
+        self.assertEqual(native.HFSessionConfigV2.structVersion.offset, 4)
+        self.assertEqual(native.HFSessionConfigV2.featureMask.offset, 8)
+        self.assertEqual(native.HFSessionConfigV2.detectMode.offset, 16)
+        self.assertEqual(native.HFSessionConfigV2.reserved.offset, 32)
+        self.assertEqual(ctypes.sizeof(native.HFResourcePackInfo), 336)
+        self.assertEqual(native.HFResourcePackInfo.structSize.offset, 0)
+        self.assertEqual(native.HFResourcePackInfo.structVersion.offset, 4)
+        self.assertEqual(native.HFResourcePackInfo.archiveFileCount.offset, 8)
+        self.assertEqual(native.HFResourcePackInfo.tag.offset, 16)
+        self.assertEqual(native.HFResourcePackInfo.reserved.offset, 272)
 
     def test_supported_platform_mappings(self):
         self.assertEqual(

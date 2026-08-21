@@ -1,4 +1,5 @@
 import ctypes
+import os
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
@@ -16,6 +17,7 @@ from .exception import (
     ProcessingError,
     ResourceError,
     SystemNotReadyError,
+    UnsupportedError,
     check_error,
     handle_c_api_errors,
     validate_feature_data,
@@ -1176,14 +1178,80 @@ class InspireFaceSession:
 
 # == Global API ==
 
+@dataclass(frozen=True)
+class ResourcePackInfo:
+    """Validated, immutable metadata for an InspireFace resource pack."""
+
+    tag: str
+    version: str
+    major: str
+    release_date: str
+    archive_file_count: int
+    model_count: int
+
+
+def _resource_path_argument(resource_path):
+    try:
+        normalized = os.fspath(resource_path)
+    except TypeError as error:
+        raise InvalidInputError(
+            "resource_path must be a string or path-like object",
+            errcode.HERR_INVALID_PARAM,
+            resource_path_type=type(resource_path).__name__,
+        ) from error
+    if isinstance(normalized, bytes):
+        if not normalized:
+            raise InvalidInputError("resource_path must not be empty", errcode.HERR_INVALID_PARAM)
+        return os.fsdecode(normalized), String(normalized)
+    if not isinstance(normalized, str) or not normalized:
+        raise InvalidInputError("resource_path must not be empty", errcode.HERR_INVALID_PARAM)
+    return normalized, String(os.fsencode(normalized))
+
+
+def _decode_resource_pack_text(value) -> str:
+    return bytes(value).split(b"\0", 1)[0].decode("utf-8")
+
+
+def validate_resource_pack(resource_path) -> ResourcePackInfo:
+    """Validate a model resource pack without changing SDK launch state.
+
+    Native libraries predating this API remain usable by :func:`launch` and
+    :func:`reload`; explicitly requesting validation with such a library raises
+    :class:`UnsupportedError`.
+    """
+    validator = globals().get("HFValidateResourcePack")
+    if validator is None:
+        raise UnsupportedError(
+            "Resource-pack validation is unavailable in the loaded native library",
+            errcode.HERR_UNSUPPORTED,
+        )
+    normalized_path, path_c = _resource_path_argument(resource_path)
+    native_info = HFResourcePackInfo()
+    native_info.structSize = ctypes.sizeof(native_info)
+    native_info.structVersion = HF_RESOURCE_PACK_INFO_VERSION
+    check_error(
+        validator(path_c, ctypes.byref(native_info)),
+        "Validate InspireFace resource pack",
+        resource_path=normalized_path,
+    )
+    return ResourcePackInfo(
+        tag=_decode_resource_pack_text(native_info.tag),
+        version=_decode_resource_pack_text(native_info.version),
+        major=_decode_resource_pack_text(native_info.major),
+        release_date=_decode_resource_pack_text(native_info.releaseDate),
+        archive_file_count=int(native_info.archiveFileCount),
+        model_count=int(native_info.modelCount),
+    )
+
+
 def _check_modelscope_availability():
     """
     Check if ModelScope is available when needed and provide helpful error message if not.
-    
+
     Raises ResourceError if ModelScope is needed but not available and OSS is not enabled.
     """
     from .utils.resource import USE_OSS_DOWNLOAD
-    
+
     # Dynamic check for ModelScope availability (don't rely on cached MODELSCOPE_AVAILABLE)
     modelscope_available = True
     try:
@@ -1196,6 +1264,7 @@ def _check_modelscope_availability():
             "ModelScope is unavailable; install modelscope or call use_oss_download(True) before downloading models",
             original_error=str(error),
         ) from error
+
 
 def launch(model_name: str = "Pikachu", resource_path: str = None) -> bool:
     """
@@ -1213,22 +1282,25 @@ def launch(model_name: str = "Pikachu", resource_path: str = None) -> bool:
     """
     if resource_path is None:
         from .utils.resource import USE_OSS_DOWNLOAD
-        
+
         # Check if ModelScope is available when needed
         _check_modelscope_availability()
-        
+
         # Use ModelScope by default unless OSS is forced
         sm = ResourceManager(use_modelscope=not USE_OSS_DOWNLOAD)
         resource_path = sm.get_model(model_name, ignore_verification=IGNORE_VERIFICATION_OF_THE_LATEST_MODEL)
-    path_c = String(bytes(resource_path, encoding="utf8"))
+    normalized_path, path_c = _resource_path_argument(resource_path)
+    if globals().get("HFValidateResourcePack") is not None:
+        validate_resource_pack(normalized_path)
     ret = HFLaunchInspireFace(path_c)
     if ret != 0:
         if ret == errcode.HERR_ARCHIVE_REPETITION_LOAD:
             logger.warning("Duplicate loading was found")
             return True
         else:
-            check_error(ret, "Launch InspireFace", model_name=model_name, resource_path=resource_path)
+            check_error(ret, "Launch InspireFace", model_name=model_name, resource_path=normalized_path)
     return True
+
 
 def pull_latest_model(model_name: str = "Pikachu") -> str:
     """
@@ -1241,13 +1313,14 @@ def pull_latest_model(model_name: str = "Pikachu") -> str:
         str: Path to the downloaded model.
     """
     from .utils.resource import USE_OSS_DOWNLOAD
-    
+
     # Check if ModelScope is available when needed
     _check_modelscope_availability()
-    
+
     sm = ResourceManager(use_modelscope=not USE_OSS_DOWNLOAD)
     resource_path = sm.get_model(model_name, re_download=True)
     return resource_path
+
 
 def reload(model_name: str = "Pikachu", resource_path: str = None) -> bool:
     """
@@ -1262,21 +1335,24 @@ def reload(model_name: str = "Pikachu", resource_path: str = None) -> bool:
     """
     if resource_path is None:
         from .utils.resource import USE_OSS_DOWNLOAD
-        
+
         # Check if ModelScope is available when needed
         _check_modelscope_availability()
-        
+
         sm = ResourceManager(use_modelscope=not USE_OSS_DOWNLOAD)
         resource_path = sm.get_model(model_name, ignore_verification=IGNORE_VERIFICATION_OF_THE_LATEST_MODEL)
-    path_c = String(bytes(resource_path, encoding="utf8"))
+    normalized_path, path_c = _resource_path_argument(resource_path)
+    if globals().get("HFValidateResourcePack") is not None:
+        validate_resource_pack(normalized_path)
     ret = HFReloadInspireFace(path_c)
     if ret != 0:
         if ret == errcode.HERR_ARCHIVE_REPETITION_LOAD:
             logger.warning("Duplicate loading was found")
             return True
         else:
-            check_error(ret, "Reload InspireFace", model_name=model_name, resource_path=resource_path)
+            check_error(ret, "Reload InspireFace", model_name=model_name, resource_path=normalized_path)
     return True
+
 
 def terminate() -> bool:
     """
@@ -1790,6 +1866,20 @@ def version() -> str:
     ret = HFQueryInspireFaceVersion(PHFInspireFaceVersion(ver))
     check_error(ret, "Query InspireFace version")
     return f"{ver.major}.{ver.minor}.{ver.patch}"
+
+
+def c_api_level() -> int:
+    """Return the highest C API level supported by the loaded native library.
+
+    Native libraries released before the level-query symbol was introduced are
+    level 1, so the fallback preserves compatibility with existing deployments.
+    """
+    query = globals().get("HFQueryCAPILevel")
+    if query is None:
+        return 1
+    api_level = HFUInt32()
+    check_error(query(ctypes.byref(api_level)), "Query C API level")
+    return int(api_level.value)
 
 
 _COMPONENT_TYPES = (

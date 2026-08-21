@@ -8,8 +8,9 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <memory>
 #include <mutex>
-#include <unordered_set>
+#include <unordered_map>
 #include <vector>
 
 #include "log.h"
@@ -36,6 +37,7 @@ struct ResourceStatistics {
     ResourceCounts streams;
     ResourceCounts image_bitmaps;
     ResourceCounts face_features;
+    ResourceCounts face_result_snapshots;
 };
 
 /**
@@ -46,6 +48,28 @@ struct ResourceStatistics {
  */
 class INSPIRE_API ResourceManager {
 public:
+    /**
+     * Pins the object backing a validated opaque handle for the duration of a
+     * C API call. Releasing the public handle removes it from the registry
+     * immediately, while destruction is deferred until the final lease ends.
+     */
+    class ResourceLease {
+    public:
+        ResourceLease() = default;
+
+        explicit operator bool() const {
+            return acquired_;
+        }
+
+    private:
+        friend class ResourceManager;
+
+        ResourceLease(bool acquired, std::shared_ptr<void> owner) : acquired_(acquired), owner_(std::move(owner)) {}
+
+        bool acquired_{false};
+        std::shared_ptr<void> owner_;
+    };
+
     ResourceManager(const ResourceManager &) = delete;
     ResourceManager &operator=(const ResourceManager &) = delete;
 
@@ -54,44 +78,99 @@ public:
         return &instance;
     }
 
-    bool createSession(ResourceHandle handle) {
+    bool createSession(ResourceHandle handle, std::shared_ptr<void> owner = {}) {
         std::lock_guard<std::mutex> lock(mutex_);
-        return Register(session_registry_, handle);
+        return Register(session_registry_, handle, std::move(owner));
     }
 
     bool releaseSession(ResourceHandle handle) {
-        std::lock_guard<std::mutex> lock(mutex_);
-        return Release(session_registry_, handle);
+        std::shared_ptr<void> released_owner;
+        bool released = false;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            released = Release(session_registry_, handle, released_owner);
+        }
+        return released;
     }
 
-    bool createStream(ResourceHandle handle) {
+    bool createStream(ResourceHandle handle, std::shared_ptr<void> owner = {}) {
         std::lock_guard<std::mutex> lock(mutex_);
-        return Register(stream_registry_, handle);
+        return Register(stream_registry_, handle, std::move(owner));
     }
 
     bool releaseStream(ResourceHandle handle) {
-        std::lock_guard<std::mutex> lock(mutex_);
-        return Release(stream_registry_, handle);
+        std::shared_ptr<void> released_owner;
+        bool released = false;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            released = Release(stream_registry_, handle, released_owner);
+        }
+        return released;
     }
 
-    bool createImageBitmap(ResourceHandle handle) {
+    bool createImageBitmap(ResourceHandle handle, std::shared_ptr<void> owner = {}) {
         std::lock_guard<std::mutex> lock(mutex_);
-        return Register(image_bitmap_registry_, handle);
+        return Register(image_bitmap_registry_, handle, std::move(owner));
     }
 
     bool releaseImageBitmap(ResourceHandle handle) {
-        std::lock_guard<std::mutex> lock(mutex_);
-        return Release(image_bitmap_registry_, handle);
+        std::shared_ptr<void> released_owner;
+        bool released = false;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            released = Release(image_bitmap_registry_, handle, released_owner);
+        }
+        return released;
     }
 
-    bool createFaceFeature(ResourceHandle handle) {
+    bool createFaceFeature(ResourceHandle handle, std::shared_ptr<void> owner = {}) {
         std::lock_guard<std::mutex> lock(mutex_);
-        return Register(face_feature_registry_, handle);
+        return Register(face_feature_registry_, handle, std::move(owner));
     }
 
     bool releaseFaceFeature(ResourceHandle handle) {
+        std::shared_ptr<void> released_owner;
+        bool released = false;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            released = Release(face_feature_registry_, handle, released_owner);
+        }
+        return released;
+    }
+
+    bool createFaceResultSnapshot(ResourceHandle handle, std::shared_ptr<void> owner = {}) {
         std::lock_guard<std::mutex> lock(mutex_);
-        return Release(face_feature_registry_, handle);
+        return Register(face_result_snapshot_registry_, handle, std::move(owner));
+    }
+
+    bool releaseFaceResultSnapshot(ResourceHandle handle) {
+        std::shared_ptr<void> released_owner;
+        bool released = false;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            released = Release(face_result_snapshot_registry_, handle, released_owner);
+        }
+        return released;
+    }
+
+    ResourceLease acquireSession(ResourceHandle handle) const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return Acquire(session_registry_, handle);
+    }
+
+    ResourceLease acquireStream(ResourceHandle handle) const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return Acquire(stream_registry_, handle);
+    }
+
+    ResourceLease acquireImageBitmap(ResourceHandle handle) const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return Acquire(image_bitmap_registry_, handle);
+    }
+
+    ResourceLease acquireFaceResultSnapshot(ResourceHandle handle) const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return Acquire(face_result_snapshot_registry_, handle);
     }
 
     bool isSessionLive(ResourceHandle handle) const {
@@ -114,6 +193,11 @@ public:
         return Contains(face_feature_registry_, handle);
     }
 
+    bool isFaceResultSnapshotLive(ResourceHandle handle) const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return Contains(face_result_snapshot_registry_, handle);
+    }
+
     std::vector<ResourceHandle> getUnreleasedSessions() const {
         std::lock_guard<std::mutex> lock(mutex_);
         return Snapshot(session_registry_);
@@ -134,6 +218,11 @@ public:
         return Snapshot(face_feature_registry_);
     }
 
+    std::vector<ResourceHandle> getUnreleasedFaceResultSnapshots() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return Snapshot(face_result_snapshot_registry_);
+    }
+
     ResourceStatistics getResourceStatistics() const {
         std::lock_guard<std::mutex> lock(mutex_);
         ResourceStatistics statistics;
@@ -141,6 +230,7 @@ public:
         statistics.streams = Counts(stream_registry_);
         statistics.image_bitmaps = Counts(image_bitmap_registry_);
         statistics.face_features = Counts(face_feature_registry_);
+        statistics.face_result_snapshots = Counts(face_result_snapshot_registry_);
         return statistics;
     }
 
@@ -153,35 +243,50 @@ public:
         PrintCounts("Stream", statistics.streams);
         PrintCounts("Bitmap", statistics.image_bitmaps);
         PrintCounts("FaceFeature", statistics.face_features);
+        PrintCounts("FaceSnapshot", statistics.face_result_snapshots);
         INSPIRE_LOGI("================================================================");
     }
 
 private:
     struct Registry {
-        std::unordered_set<ResourceHandle> live_handles;
+        std::unordered_map<ResourceHandle, std::shared_ptr<void>> live_handles;
         uint64_t total_created = 0;
         uint64_t total_released = 0;
     };
 
     ResourceManager() = default;
 
-    static bool Register(Registry &registry, ResourceHandle handle) {
+    static bool Register(Registry &registry, ResourceHandle handle, std::shared_ptr<void> owner) {
         if (handle == 0) {
             return false;
         }
-        const bool inserted = registry.live_handles.insert(handle).second;
+        const bool inserted = registry.live_handles.emplace(handle, std::move(owner)).second;
         if (inserted) {
             ++registry.total_created;
         }
         return inserted;
     }
 
-    static bool Release(Registry &registry, ResourceHandle handle) {
-        if (handle == 0 || registry.live_handles.erase(handle) == 0) {
+    static bool Release(Registry &registry, ResourceHandle handle, std::shared_ptr<void>& released_owner) {
+        const auto position = registry.live_handles.find(handle);
+        if (handle == 0 || position == registry.live_handles.end()) {
             return false;
         }
+        released_owner = std::move(position->second);
+        registry.live_handles.erase(position);
         ++registry.total_released;
         return true;
+    }
+
+    static ResourceLease Acquire(const Registry &registry, ResourceHandle handle) {
+        if (handle == 0) {
+            return {};
+        }
+        const auto position = registry.live_handles.find(handle);
+        if (position == registry.live_handles.end()) {
+            return {};
+        }
+        return ResourceLease(true, position->second);
     }
 
     static bool Contains(const Registry &registry, ResourceHandle handle) {
@@ -189,7 +294,11 @@ private:
     }
 
     static std::vector<ResourceHandle> Snapshot(const Registry &registry) {
-        std::vector<ResourceHandle> handles(registry.live_handles.begin(), registry.live_handles.end());
+        std::vector<ResourceHandle> handles;
+        handles.reserve(registry.live_handles.size());
+        for (const auto& entry : registry.live_handles) {
+            handles.push_back(entry.first);
+        }
         std::sort(handles.begin(), handles.end());
         return handles;
     }
@@ -212,6 +321,7 @@ private:
     Registry stream_registry_;
     Registry image_bitmap_registry_;
     Registry face_feature_registry_;
+    Registry face_result_snapshot_registry_;
 };
 
 }  // namespace inspire

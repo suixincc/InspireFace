@@ -25,6 +25,7 @@
 #define HERR_INVALID_DETECTION_INPUT (HERR_BASIC_BASE + 10)      // Failed to modify detector input size (11)
 #define HERR_INVALID_IMAGE_BITMAP_HANDLE (HERR_BASIC_BASE + 11)  // Invalid image bitmap handle (12)
 #define HERR_IMAGE_STREAM_DECODE_FAILED (HERR_BASIC_BASE + 12)  // ImageStream failed to decode the image (13)
+#define HERR_UNSUPPORTED (HERR_BASIC_BASE + 13)                 // Requested feature or operation is unsupported (14)
 
 // Session error types (100-199)
 #define HERR_SESS_BASE 0x0064                                   // Session error types (100)

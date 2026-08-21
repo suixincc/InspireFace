@@ -12,8 +12,15 @@ import weakref
 import numpy as np
 
 import inspireface as ifac
-from inspireface.modules.core import HF_LOG_ERROR
-from inspireface.modules.exception import InvalidInputError, ResourceError
+from inspireface.modules.core import (
+    HF_LOG_ERROR,
+    HFExecuteFaceTrackSnapshot,
+    HFFaceResultSnapshot,
+    HFGetFaceResultSnapshotData,
+    HFMultipleFaceData,
+    HFReleaseFaceResultSnapshot,
+)
+from inspireface.modules.exception import InvalidInputError, ResourceError, check_error
 from inspireface.param import (
     HF_CAMERA_ROTATION_0,
     HF_DETECT_MODE_ALWAYS_DETECT,
@@ -34,8 +41,76 @@ from .settings import MODEL_PATH
 
 
 class SystemCase(NativeResourceCaseMixin, unittest.TestCase):
+    def test_resource_pack_validation_is_side_effect_free_and_bounded(self):
+        launch_status = ifac.query_launch_status()
+        started = time.perf_counter()
+        info = ifac.validate_resource_pack(MODEL_PATH)
+        elapsed = time.perf_counter() - started
+
+        self.assertIsInstance(info, ifac.ResourcePackInfo)
+        self.assertEqual(info.tag, "Pikachu")
+        self.assertEqual(info.version, "4.0")
+        self.assertTrue(info.major)
+        self.assertTrue(info.release_date)
+        self.assertGreater(info.archive_file_count, 1)
+        self.assertGreater(info.model_count, 0)
+        self.assertEqual(ifac.query_launch_status(), launch_status)
+        self.assertLess(elapsed, 2.0)
+
+        with self.assertRaises(ifac.InspireFaceError):
+            ifac.validate_resource_pack(str(MODEL_PATH) + ".missing")
+        self.assertEqual(ifac.query_launch_status(), launch_status)
+
+    def test_owned_detection_snapshot_survives_python_resource_release(self):
+        snapshot = HFFaceResultSnapshot()
+        expected_token = None
+        try:
+            image = load_image("bulk/kun.jpg")
+            with ifac.InspireFaceSession(HF_ENABLE_NONE) as session:
+                with ifac.ImageStream.load_from_cv_image(image) as stream:
+                    check_error(
+                        HFExecuteFaceTrackSnapshot(
+                            session._sess,
+                            stream.handle,
+                            ctypes.byref(snapshot),
+                        ),
+                        "Execute owned face tracking",
+                    )
+                    data = HFMultipleFaceData()
+                    check_error(
+                        HFGetFaceResultSnapshotData(snapshot, ctypes.byref(data)),
+                        "Read owned face result",
+                    )
+                    self.assertGreater(data.detectedNum, 0)
+                    self.assertGreater(data.tokens[0].size, 0)
+                    expected_token = ctypes.string_at(
+                        data.tokens[0].data,
+                        data.tokens[0].size,
+                    )
+
+            persistent = HFMultipleFaceData()
+            check_error(
+                HFGetFaceResultSnapshotData(snapshot, ctypes.byref(persistent)),
+                "Read persistent owned face result",
+            )
+            self.assertGreater(persistent.detectedNum, 0)
+            self.assertEqual(
+                ctypes.string_at(
+                    persistent.tokens[0].data,
+                    persistent.tokens[0].size,
+                ),
+                expected_token,
+            )
+        finally:
+            if snapshot:
+                check_error(
+                    HFReleaseFaceResultSnapshot(snapshot),
+                    "Release owned face result",
+                )
+
     def test_launch_status_and_version(self):
         self.assertTrue(ifac.query_launch_status())
+        self.assertEqual(ifac.c_api_level(), 2)
         parts = ifac.version().split(".")
         self.assertEqual(len(parts), 3)
         self.assertTrue(all(part.isdigit() for part in parts))

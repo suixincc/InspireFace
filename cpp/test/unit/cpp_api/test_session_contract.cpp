@@ -68,6 +68,24 @@ TEST_CASE("C++ Session creation rejects invalid configuration transactionally", 
     }
 }
 
+TEST_CASE("C++ Session reports unsupported IR requests explicitly", "[cpp_api][contract][session][unsupported][ir]") {
+    const auto image = inspirecv::Image::Create(GET_DATA("data/bulk/kun.jpg"));
+    REQUIRE(!image.Empty());
+    auto process = inspirecv::FrameProcess::Create(image, inspirecv::BGR, inspirecv::ROTATION_0);
+
+    CustomPipelineParameter ir_parameter;
+    ir_parameter.enable_ir_liveness = true;
+    Session ir_session = Session::Create(inspire::DETECT_MODE_ALWAYS_DETECT, 1, ir_parameter);
+    std::vector<FaceTrackWrap> faces;
+    CHECK(ir_session.FaceDetectAndTrack(process, faces) == HERR_UNSUPPORTED);
+    CHECK(faces.empty());
+
+    Session session = Session::Create(inspire::DETECT_MODE_ALWAYS_DETECT, 1, CustomPipelineParameter());
+    REQUIRE(session.FaceDetectAndTrack(process, faces) == HSUCCEED);
+    REQUIRE(!faces.empty());
+    CHECK(session.MultipleFacePipelineProcess(process, ir_parameter, faces) == HERR_UNSUPPORTED);
+}
+
 TEST_CASE("C++ Session move ownership retains detection and landmark behavior", "[cpp_api][contract][session][face_track]") {
     CustomPipelineParameter parameter;
     Session original = Session::Create(inspire::DETECT_MODE_ALWAYS_DETECT, 3, parameter);

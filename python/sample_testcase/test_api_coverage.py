@@ -15,8 +15,10 @@ COVERED_PUBLIC_API = {
     "FeatureHubConfiguration",
     "ImageStream",
     "InspireFaceSession",
+    "ResourcePackInfo",
     "SearchResult",
     "SessionCustomParameter",
+    "c_api_level",
     "cosine_similarity_convert_to_percentage",
     "component_versions",
     "diagnostic_info",
@@ -41,6 +43,7 @@ COVERED_PUBLIC_API = {
     "set_logging_level",
     "set_similarity_converter_config",
     "terminate",
+    "validate_resource_pack",
     "version",
 }
 

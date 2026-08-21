@@ -63,8 +63,18 @@ class FeatureHubError(InspireFaceError):
     pass
 
 
+class UnsupportedError(InspireFaceError, NotImplementedError):
+    """Requested feature or operation is unavailable in this SDK build."""
+    pass
+
+
 # === Error code mapping table ===
 ERROR_CODE_MAPPING = {
+    # Recognized operations that this SDK does not implement
+    'unsupported': [
+        errcode.HERR_UNSUPPORTED,
+    ],
+
     # Input parameter errors
     'invalid_input': [
         errcode.HERR_INVALID_PARAM,
@@ -123,6 +133,7 @@ for _name, _value in vars(errcode).items():
 del _name, _value
 
 _EXCEPTION_TYPES = {
+    'unsupported': UnsupportedError,
     'invalid_input': InvalidInputError,
     'system_not_ready': SystemNotReadyError,
     'processing': ProcessingError,

@@ -279,6 +279,40 @@ bash command/build_android.sh
 
 After the compilation is complete, arm64-v8a and armeabi-v7a libraries will be placed in the `build/inspireface-android` directory.
 
+### HarmonyOS Compilation and ArkTS Usage
+
+Prepare an OpenHarmony Native SDK, set its native directory, and build the ARM64 Node-API module:
+
+```bash
+export OHOS_NATIVE_HOME=/path/to/openharmony-sdk/native
+./command/build_harmonyos_napi.sh
+```
+
+The build stages an importable HAR module at `build/inspireface-harmonyos-napi-arm64-v8a/install/HarmonyOS/har`. Add this module to a DevEco Studio project, then use the ArkTS wrapper as follows. `modelPath` must be a filesystem path accessible to the application, and the image byte length must exactly match its format and dimensions.
+
+```typescript
+import { DetectMode, ImageFormat, InspireFace, Rotation } from '@hyperinspire/inspireface';
+
+InspireFace.launch(modelPath);
+const session = InspireFace.createSession({
+  detectMode: DetectMode.ALWAYS_DETECT,
+  maxFaces: 5
+});
+const image = InspireFace.createImageStream(rgbaBytes, width, height,
+  ImageFormat.RGBA, Rotation.DEGREE_0);
+
+try {
+  const result = session.track(image);
+  console.info(`Detected faces: ${result.detectedNum}`);
+} finally {
+  image.close();
+  session.close();
+  InspireFace.terminate();
+}
+```
+
+For the complete supported ArkTS surface and ownership notes, see [HarmonyOS SDK documentation](harmony/inspireface/README.md).
+
 ### Linux-based NVIDIA GPU Acceleration with TensorRT Compilation
 
 If you want to use NVIDIA GPU devices for accelerated inference on Linux, you need to install **CUDA**, **cuDNN**, and **TensorRT-10** on your device, and configure the relevant environment variables.
@@ -329,13 +363,15 @@ We have completed the adaptation and testing of the software across various oper
 | 15 | | x86_64 | - | [![](https://img.shields.io/badge/%E2%9C%93-green)](#) | [![](https://img.shields.io/badge/%E2%9C%93-green)](#) | [![build](https://img.shields.io/github/actions/workflow/status/HyperInspire/InspireFace/release-sdks.yaml?label=✓&labelColor=success&color=success&failedLabel=✗&failedColor=critical&logo=github&logoColor=white)](https://github.com/HyperInspire/InspireFace/actions/workflows/release-sdks.yaml) |
 | 16 | **Android**<sup><br/>(Rockchip) | ARMv8 | RK3566/RK3568 | [![](https://img.shields.io/badge/%E2%9C%93-green)](#) | [![](https://img.shields.io/badge/%E2%9C%93-green)](#) | [![build](https://img.shields.io/github/actions/workflow/status/HyperInspire/InspireFace/release-sdks.yaml?label=✓&labelColor=success&color=success&failedLabel=✗&failedColor=critical&logo=github&logoColor=white)](https://github.com/HyperInspire/InspireFace/actions/workflows/release-sdks.yaml) |
 | 17 |  | ARMv8 | RK3588 | [![](https://img.shields.io/badge/%E2%9C%93-green)](#) | [![](https://img.shields.io/badge/%E2%9C%93-green)](#) | [![build](https://img.shields.io/github/actions/workflow/status/HyperInspire/InspireFace/release-sdks.yaml?label=✓&labelColor=success&color=success&failedLabel=✗&failedColor=critical&logo=github&logoColor=white)](https://github.com/HyperInspire/InspireFace/actions/workflows/release-sdks.yaml) |
-| 18 | **HarmonyOS** | ARMv8 | - | - | - | - |
+| 18 | **HarmonyOS** | ARMv8 | - | [![](https://img.shields.io/badge/%E2%9C%93-green)](#) | - | - |
 | 19 | **Linux**<sup><br/>(Jetson series) | ARMv8 | Jetson series | - | - | - |
 
 - **Device**: Some special device support, primarily focused on computing power devices.
 - **Supported**: The solution has been fully developed and successfully verified on offline devices.
 - **Passed Tests**: The feature has at least **passed unit tests** on offline devices.
 - **Release**: The solution is already supported and has been successfully compiled and released through **[GitHub Actions](https://github.com/HyperInspire/InspireFace/actions/workflows/built_release_from_docker.yaml)**.
+
+> HarmonyOS currently marks build and API adaptation support only. Passed Tests and Release remain unmarked until validation on HarmonyOS hardware is available.
 
 ### Multi-platform compilation using Docker
 

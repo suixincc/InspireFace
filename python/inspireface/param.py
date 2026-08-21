@@ -1,6 +1,7 @@
 """Public constants used by the high-level InspireFace Python API."""
 
 from inspireface.modules.core.native import (
+    HF_C_API_LEVEL,
     HF_CAMERA_ROTATION_0,
     HF_CAMERA_ROTATION_90,
     HF_CAMERA_ROTATION_180,
@@ -32,6 +33,7 @@ from inspireface.modules.core.native import (
     HF_PK_MANUAL_INPUT,
     HF_SEARCH_MODE_EAGER,
     HF_SEARCH_MODE_EXHAUSTIVE,
+    HF_SESSION_CONFIG_V2_VERSION,
     HF_STREAM_BGR,
     HF_STREAM_BGRA,
     HF_STREAM_GRAY,

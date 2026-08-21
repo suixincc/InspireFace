@@ -178,6 +178,13 @@ option(ISF_BUILD_WITH_TEST "Open Build Unit-Test." ON)
 # If you want to build the sample, you need to set this to ON
 option(ISF_BUILD_WITH_SAMPLE "Open Build Sample Exec." ON)
 
+# Build the ArkTS Node-API adapter as a separate target. The core SDK remains
+# platform-neutral and the adapter calls only the public C API.
+option(ISF_BUILD_OHOS_NAPI "Build the HarmonyOS ArkTS Node-API adapter." OFF)
+if(ISF_BUILD_OHOS_NAPI AND NOT OHOS)
+    message(FATAL_ERROR "ISF_BUILD_OHOS_NAPI requires the OpenHarmony toolchain")
+endif()
+
 # Keep the migration opt-in until InspireCV Task preprocessing has passed the
 # same end-to-end accuracy and performance gates as MNN ImageProcess.
 option(ISF_ENABLE_INSPIRECV_TASK_PREPROCESS "Use InspireCV Task API for image preprocessing." OFF)
@@ -202,7 +209,10 @@ endif()
 
 include_directories(${ISF_THIRD_PARTY_DIR}/InspireCV/3rdparty/Eigen-3.4.0-Headers)
 
-if(APPLE)
+if(OHOS)
+    message("Use OpenHarmony device")
+    set(PLAT ohos)
+elseif(APPLE)
     if(IOS)
         add_definitions(-DTARGET_OS_IOS)
         message(IOS_3RDPARTY=${IOS_3RDPARTY})
@@ -337,6 +347,10 @@ set(CMAKE_INSTALL_PREFIX "${CMAKE_BINARY_DIR}/install")
 # Add a child project: InspireFace Source
 add_subdirectory(cpp/inspireface)
 get_property(InspireFace TARGET InspireFace PROPERTY InspireFace)
+
+if(ISF_BUILD_OHOS_NAPI)
+    add_subdirectory(cpp/inspireface/platform/ohos/napi)
+endif()
 
 # Add a child project: Samples
 if (ISF_BUILD_WITH_SAMPLE)

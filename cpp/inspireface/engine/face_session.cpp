@@ -22,6 +22,9 @@ int32_t FaceSession::Configuration(DetectModuleMode detect_mode, int32_t max_det
         (detect_mode == DETECT_MODE_TRACK_BY_DETECT && track_by_detect_mode_fps == 0)) {
         return HERR_INVALID_PARAM;
     }
+    if (param.enable_ir_liveness) {
+        return HERR_UNSUPPORTED;
+    }
     auto archive = INSPIREFACE_CONTEXT->AcquireArchive();
     if (!archive) {
         return HERR_ARCHIVE_NOT_LOAD;
@@ -172,6 +175,9 @@ const int32_t FaceSession::GetNumberOfFacesCurrentlyDetected() const {
 }
 
 int32_t FaceSession::FacesProcess(inspirecv::FrameProcess& process, const std::vector<FaceTrackWrap>& faces, const CustomPipelineParameter& param) {
+    if (param.enable_ir_liveness) {
+        return HERR_UNSUPPORTED;
+    }
     std::lock_guard<std::mutex> lock(m_mtx_);
     m_mask_results_cache_.assign(faces.size(), -1.0f);
     m_rgb_liveness_results_cache_.assign(faces.size(), -1.0f);

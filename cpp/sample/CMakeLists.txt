@@ -244,6 +244,18 @@ if(BUILD_TESTING)
         add_test(NAME InspireFace.JNI.DataLifecycle COMMAND JniDataLifecycleGuardSample)
 endif()
 
+add_executable(OhosNapiContractGuardSample benchmark/ohos_napi_contract_guard.cpp)
+target_link_libraries(OhosNapiContractGuardSample InspireFace ${ext})
+set_target_properties(OhosNapiContractGuardSample PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/sample/benchmark/"
+)
+if(BUILD_TESTING)
+        add_test(NAME InspireFace.OHOS.NapiContract COMMAND OhosNapiContractGuardSample)
+        set_tests_properties(InspireFace.OHOS.NapiContract PROPERTIES
+                LABELS "ohos;contract;performance"
+                TIMEOUT 30)
+endif()
+
 add_executable(FrameProcessContractGuardSample benchmark/frame_process_contract_guard.cpp)
 target_link_libraries(FrameProcessContractGuardSample InspireFace ${ext})
 set_target_properties(FrameProcessContractGuardSample PROPERTIES

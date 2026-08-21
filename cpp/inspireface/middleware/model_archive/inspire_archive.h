@@ -26,6 +26,16 @@ enum {
     NOT_MATCH_MODEL = -13,
     ERROR_MODEL_BUFFER = -14,
     NOT_READ = -15,
+    UNSUPPORTED_MODEL_ENGINE = -16,
+};
+
+struct ResourcePackMetadata {
+    std::string tag;
+    std::string version;
+    std::string major;
+    std::string release_time;
+    size_t archive_file_count{0};
+    size_t model_count{0};
 };
 
 class INSPIRE_API InspireArchive {
@@ -188,6 +198,77 @@ public:
         return m_similarity_converter_config_;
     }
 
+    /**
+     * Validate all required and declared models without constructing an
+     * inference engine or publishing any global SDK state.
+     */
+    int32_t ValidateContents(ResourcePackMetadata& metadata) {
+        if (m_status_ != SARC_SUCCESS || !m_config_ || !m_config_.IsMap()) {
+            return m_status_ == SARC_SUCCESS ? FORMAT_ERROR : m_status_;
+        }
+
+        std::set<std::string> validated_models;
+        auto validate_model = [&](const std::string& key) -> int32_t {
+            if (key.empty() || validated_models.find(key) != validated_models.end()) {
+                return key.empty() ? NOT_MATCH_MODEL : SARC_SUCCESS;
+            }
+            InspireModel model;
+            const int32_t status = LoadModel(key, model);
+            if (status != SARC_SUCCESS) {
+                return status;
+            }
+            if (!IsInferenceEngineSupported(model.inferEngine) || !IsInferenceEngineSupported(model.modelType)) {
+                return UNSUPPORTED_MODEL_ENGINE;
+            }
+            if (model.loadFilePath && model.fullname.empty()) {
+                return ERROR_MODEL_BUFFER;
+            }
+            validated_models.emplace(key);
+            return SARC_SUCCESS;
+        };
+
+        for (const auto& detector : m_face_detect_model_list_) {
+            const int32_t status = validate_model(detector);
+            if (status != SARC_SUCCESS) {
+                return status;
+            }
+        }
+        if (!m_landmark_param_) {
+            return FORMAT_ERROR;
+        }
+        int32_t status = validate_model(m_landmark_param_->landmark_engine_name);
+        if (status != SARC_SUCCESS) {
+            return status;
+        }
+        status = validate_model("refine_net");
+        if (status != SARC_SUCCESS) {
+            return status;
+        }
+
+        try {
+            for (const auto& entry : m_config_) {
+                if (!entry.first.IsScalar() || !entry.second.IsMap() || !entry.second["name"]) {
+                    continue;
+                }
+                status = validate_model(entry.first.as<std::string>());
+                if (status != SARC_SUCCESS) {
+                    return status;
+                }
+            }
+        } catch (const std::exception& error) {
+            INSPIRE_LOGE("Failed to validate archive model entries: %s", error.what());
+            return FORMAT_ERROR;
+        }
+
+        metadata.tag = m_tag_;
+        metadata.version = m_version_;
+        metadata.major = m_major_;
+        metadata.release_time = m_release_time_;
+        metadata.archive_file_count = m_archive_->GetSubfilesNames().size();
+        metadata.model_count = validated_models.size();
+        return SARC_SUCCESS;
+    }
+
 private:
     struct ManifestData {
         YAML::Node config;
@@ -289,6 +370,33 @@ private:
         } catch (const std::exception& error) {
             INSPIRE_LOGE("Failed to parse archive manifest: %s", error.what());
             return FORMAT_ERROR;
+        }
+    }
+
+    static bool IsInferenceEngineSupported(int engine) {
+        switch (engine) {
+            case InferenceWrapper::INFER_MNN:
+                return true;
+            case InferenceWrapper::INFER_RKNN:
+#if defined(ISF_ENABLE_RKNN)
+                return true;
+#else
+                return false;
+#endif
+            case InferenceWrapper::INFER_COREML:
+#if defined(ISF_ENABLE_APPLE_EXTENSION)
+                return true;
+#else
+                return false;
+#endif
+            case InferenceWrapper::INFER_TENSORRT:
+#if defined(ISF_ENABLE_TENSORRT)
+                return true;
+#else
+                return false;
+#endif
+            default:
+                return false;
         }
     }
 

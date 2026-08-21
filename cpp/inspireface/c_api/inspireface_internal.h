@@ -7,6 +7,7 @@
 #define INSPIREFACE_INTERNAL_H
 
 #include "engine/face_session.h"
+#include "face_result_snapshot.h"
 #include "inspireface.h"
 #include <vector>
 

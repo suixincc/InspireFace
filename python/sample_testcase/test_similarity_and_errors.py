@@ -5,8 +5,14 @@ import unittest
 import numpy as np
 
 import inspireface as ifac
-from inspireface.modules.exception import FeatureHubError, InvalidInputError
-from inspireface.param import HF_ENABLE_NONE
+from inspireface.modules import herror as errcode
+from inspireface.modules.exception import (
+    FeatureHubError,
+    InvalidInputError,
+    UnsupportedError,
+    check_error,
+)
+from inspireface.param import HF_ENABLE_IR_LIVENESS, HF_ENABLE_NONE
 
 from .common import NativeResourceCaseMixin, load_image, managed_session
 
@@ -52,6 +58,15 @@ class SimilarityConverterCase(NativeResourceCaseMixin, unittest.TestCase):
 
 
 class ErrorContractCase(NativeResourceCaseMixin, unittest.TestCase):
+    def test_unsupported_error_mapping_and_ir_session_contract(self):
+        with self.assertRaises(UnsupportedError) as raised:
+            check_error(errcode.HERR_UNSUPPORTED, "Unsupported contract")
+        self.assertEqual(raised.exception.error_code, errcode.HERR_UNSUPPORTED)
+        self.assertEqual(raised.exception.error_name, "HERR_UNSUPPORTED")
+
+        with self.assertRaises(UnsupportedError):
+            ifac.InspireFaceSession(HF_ENABLE_IR_LIVENESS)
+
     def test_feature_dtype_validation(self):
         with self.assertRaises(InvalidInputError):
             ifac.feature_comparison(

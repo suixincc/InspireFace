@@ -468,6 +468,10 @@ HFImageBitmap = POINTER(None)# /Users/tunm/work/InspireFace/cpp/inspireface/c_ap
 
 PHFImageBitmap = POINTER(POINTER(None))# /Users/tunm/work/InspireFace/cpp/inspireface/c_api/intypedef.h: 16
 
+HFFaceResultSnapshot = POINTER(None)
+
+PHFFaceResultSnapshot = POINTER(POINTER(None))
+
 HPVoid = POINTER(None)# /Users/tunm/work/InspireFace/cpp/inspireface/c_api/intypedef.h: 17
 
 HFloat = c_float# /Users/tunm/work/InspireFace/cpp/inspireface/c_api/intypedef.h: 19
@@ -481,6 +485,12 @@ HInt32 = c_int# /Users/tunm/work/InspireFace/cpp/inspireface/c_api/intypedef.h: 
 HOption = c_int# /Users/tunm/work/InspireFace/cpp/inspireface/c_api/intypedef.h: 25
 
 HPInt32 = POINTER(c_int)# /Users/tunm/work/InspireFace/cpp/inspireface/c_api/intypedef.h: 26
+
+HFStatus = c_int32
+
+HFUInt32 = c_uint32
+
+HFUInt64 = c_uint64
 
 HFaceId = c_int64# /Users/tunm/work/InspireFace/cpp/inspireface/c_api/intypedef.h: 27
 
@@ -753,6 +763,40 @@ if _libs[_LIBRARY_FILENAME].has("HFImageBitmapShow", "cdecl"):
     HFImageBitmapShow.restype = HResult
 
 # /Users/tunm/work/InspireFace/cpp/inspireface/c_api/inspireface.h: 327
+class struct_HFResourcePackInfo(Structure):
+    pass
+
+struct_HFResourcePackInfo.__slots__ = [
+    'structSize',
+    'structVersion',
+    'archiveFileCount',
+    'modelCount',
+    'tag',
+    'version',
+    'major',
+    'releaseDate',
+    'reserved',
+]
+struct_HFResourcePackInfo._fields_ = [
+    ('structSize', HFUInt32),
+    ('structVersion', HFUInt32),
+    ('archiveFileCount', HFUInt32),
+    ('modelCount', HFUInt32),
+    ('tag', HChar * int(64)),
+    ('version', HChar * int(64)),
+    ('major', HChar * int(64)),
+    ('releaseDate', HChar * int(64)),
+    ('reserved', HFUInt64 * int(8)),
+]
+
+HFResourcePackInfo = struct_HFResourcePackInfo
+PHFResourcePackInfo = POINTER(struct_HFResourcePackInfo)
+
+if _libs[_LIBRARY_FILENAME].has("HFValidateResourcePack", "cdecl"):
+    HFValidateResourcePack = _libs[_LIBRARY_FILENAME].get("HFValidateResourcePack", "cdecl")
+    HFValidateResourcePack.argtypes = [HPath, PHFResourcePackInfo]
+    HFValidateResourcePack.restype = HFStatus
+
 if _libs[_LIBRARY_FILENAME].has("HFLaunchInspireFace", "cdecl"):
     HFLaunchInspireFace = _libs[_LIBRARY_FILENAME].get("HFLaunchInspireFace", "cdecl")
     HFLaunchInspireFace.argtypes = [HPath]
@@ -908,6 +952,34 @@ HF_DETECT_MODE_TRACK_BY_DETECTION = (HF_DETECT_MODE_LIGHT_TRACK + 1)# /Users/tun
 
 HFDetectMode = enum_HFDetectMode# /Users/tunm/work/InspireFace/cpp/inspireface/c_api/inspireface.h: 498
 
+class struct_HFSessionConfigV2(Structure):
+    pass
+
+struct_HFSessionConfigV2.__slots__ = [
+    'structSize',
+    'structVersion',
+    'featureMask',
+    'detectMode',
+    'maxDetectFaceNum',
+    'detectPixelLevel',
+    'trackByDetectModeFPS',
+    'reserved',
+]
+struct_HFSessionConfigV2._fields_ = [
+    ('structSize', HFUInt32),
+    ('structVersion', HFUInt32),
+    ('featureMask', HFUInt64),
+    ('detectMode', HInt32),
+    ('maxDetectFaceNum', HInt32),
+    ('detectPixelLevel', HInt32),
+    ('trackByDetectModeFPS', HInt32),
+    ('reserved', HFUInt32 * int(8)),
+]
+
+HFSessionConfigV2 = struct_HFSessionConfigV2
+
+PHFSessionConfigV2 = POINTER(struct_HFSessionConfigV2)
+
 enum_HFSessionLandmarkEngine = c_int# /Users/tunm/work/InspireFace/cpp/inspireface/c_api/inspireface.h: 507
 
 HF_LANDMARK_HYPLMV2_0_25 = 0# /Users/tunm/work/InspireFace/cpp/inspireface/c_api/inspireface.h: 507
@@ -958,6 +1030,11 @@ if _libs[_LIBRARY_FILENAME].has("HFCreateInspireFaceSessionOptional", "cdecl"):
     HFCreateInspireFaceSessionOptional = _libs[_LIBRARY_FILENAME].get("HFCreateInspireFaceSessionOptional", "cdecl")
     HFCreateInspireFaceSessionOptional.argtypes = [HOption, HFDetectMode, HInt32, HInt32, HInt32, PHFSession]
     HFCreateInspireFaceSessionOptional.restype = HResult
+
+if _libs[_LIBRARY_FILENAME].has("HFCreateInspireFaceSessionV2", "cdecl"):
+    HFCreateInspireFaceSessionV2 = _libs[_LIBRARY_FILENAME].get("HFCreateInspireFaceSessionV2", "cdecl")
+    HFCreateInspireFaceSessionV2.argtypes = [PHFSessionConfigV2, PHFSession]
+    HFCreateInspireFaceSessionV2.restype = HFStatus
 
 # /Users/tunm/work/InspireFace/cpp/inspireface/c_api/inspireface.h: 572
 if _libs[_LIBRARY_FILENAME].has("HFReleaseInspireFaceSession", "cdecl"):
@@ -1097,6 +1174,21 @@ if _libs[_LIBRARY_FILENAME].has("HFExecuteFaceTrack", "cdecl"):
     HFExecuteFaceTrack = _libs[_LIBRARY_FILENAME].get("HFExecuteFaceTrack", "cdecl")
     HFExecuteFaceTrack.argtypes = [HFSession, HFImageStream, PHFMultipleFaceData]
     HFExecuteFaceTrack.restype = HResult
+
+if _libs[_LIBRARY_FILENAME].has("HFExecuteFaceTrackSnapshot", "cdecl"):
+    HFExecuteFaceTrackSnapshot = _libs[_LIBRARY_FILENAME].get("HFExecuteFaceTrackSnapshot", "cdecl")
+    HFExecuteFaceTrackSnapshot.argtypes = [HFSession, HFImageStream, PHFFaceResultSnapshot]
+    HFExecuteFaceTrackSnapshot.restype = HResult
+
+if _libs[_LIBRARY_FILENAME].has("HFGetFaceResultSnapshotData", "cdecl"):
+    HFGetFaceResultSnapshotData = _libs[_LIBRARY_FILENAME].get("HFGetFaceResultSnapshotData", "cdecl")
+    HFGetFaceResultSnapshotData.argtypes = [HFFaceResultSnapshot, PHFMultipleFaceData]
+    HFGetFaceResultSnapshotData.restype = HResult
+
+if _libs[_LIBRARY_FILENAME].has("HFReleaseFaceResultSnapshot", "cdecl"):
+    HFReleaseFaceResultSnapshot = _libs[_LIBRARY_FILENAME].get("HFReleaseFaceResultSnapshot", "cdecl")
+    HFReleaseFaceResultSnapshot.argtypes = [HFFaceResultSnapshot]
+    HFReleaseFaceResultSnapshot.restype = HResult
 
 # /Users/tunm/work/InspireFace/cpp/inspireface/c_api/inspireface.h: 721
 if _libs[_LIBRARY_FILENAME].has("HFSessionLastFaceDetectionGetDebugPreviewImageSize", "cdecl"):
@@ -1670,6 +1762,11 @@ if _libs[_LIBRARY_FILENAME].has("HFQueryInspireFaceVersion", "cdecl"):
     HFQueryInspireFaceVersion.argtypes = [PHFInspireFaceVersion]
     HFQueryInspireFaceVersion.restype = HResult
 
+if _libs[_LIBRARY_FILENAME].has("HFQueryCAPILevel", "cdecl"):
+    HFQueryCAPILevel = _libs[_LIBRARY_FILENAME].get("HFQueryCAPILevel", "cdecl")
+    HFQueryCAPILevel.argtypes = [POINTER(HFUInt32)]
+    HFQueryCAPILevel.restype = HFStatus
+
 enum_HFComponentType = c_int
 
 HF_COMPONENT_MNN = 0
@@ -1729,6 +1826,11 @@ if _libs[_LIBRARY_FILENAME].has("HFQueryInspireFaceDiagnosticInformation", "cdec
     HFQueryInspireFaceDiagnosticInformation = _libs[_LIBRARY_FILENAME].get("HFQueryInspireFaceDiagnosticInformation", "cdecl")
     HFQueryInspireFaceDiagnosticInformation.argtypes = [HString, HInt32, HPInt32]
     HFQueryInspireFaceDiagnosticInformation.restype = HResult
+
+if _libs[_LIBRARY_FILENAME].has("HFGetErrorMessage", "cdecl"):
+    HFGetErrorMessage = _libs[_LIBRARY_FILENAME].get("HFGetErrorMessage", "cdecl")
+    HFGetErrorMessage.argtypes = [HResult, HString, HInt32, HPInt32]
+    HFGetErrorMessage.restype = HResult
 
 # /Users/tunm/work/InspireFace/cpp/inspireface/c_api/inspireface.h: 1372
 class struct_HFInspireFaceExtendedInformation(Structure):
@@ -1835,6 +1937,20 @@ HF_STATUS_ENABLE = 1
 # /Users/tunm/work/InspireFace/cpp/inspireface/c_api/inspireface.h: 28
 HF_STATUS_DISABLE = 0
 
+HF_C_API_LEVEL = 2
+
+HF_SESSION_CONFIG_V2_VERSION = 1
+
+HF_RESOURCE_PACK_INFO_VERSION = 1
+
+HF_RESOURCE_PACK_TAG_CAPACITY = 64
+
+HF_RESOURCE_PACK_VERSION_CAPACITY = 64
+
+HF_RESOURCE_PACK_MAJOR_CAPACITY = 64
+
+HF_RESOURCE_PACK_RELEASE_CAPACITY = 64
+
 # /Users/tunm/work/InspireFace/cpp/inspireface/c_api/inspireface.h: 30
 HF_ENABLE_NONE = 0x00000000
 
@@ -1873,6 +1989,10 @@ HFImageData = struct_HFImageData# /Users/tunm/work/InspireFace/cpp/inspireface/c
 HFImageBitmapData = struct_HFImageBitmapData# /Users/tunm/work/InspireFace/cpp/inspireface/c_api/inspireface.h: 200
 
 HFSessionCustomParameter = struct_HFSessionCustomParameter# /Users/tunm/work/InspireFace/cpp/inspireface/c_api/inspireface.h: 485
+
+HFSessionConfigV2 = struct_HFSessionConfigV2
+
+HFResourcePackInfo = struct_HFResourcePackInfo
 
 HFFaceDetectPixelList = struct_HFFaceDetectPixelList# /Users/tunm/work/InspireFace/cpp/inspireface/c_api/inspireface.h: 523
 
