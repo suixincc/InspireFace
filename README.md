@@ -303,7 +303,11 @@ const image = InspireFace.createImageStream(rgbaBytes, width, height,
 
 try {
   const result = session.track(image);
-  console.info(`Detected faces: ${result.detectedNum}`);
+  try {
+    console.info(`Detected faces: ${result.detectedNum}`);
+  } finally {
+    session.releaseFaceResult(result);
+  }
 } finally {
   image.close();
   session.close();
@@ -311,7 +315,7 @@ try {
 }
 ```
 
-For the complete supported ArkTS surface and ownership notes, see [HarmonyOS SDK documentation](harmony/inspireface/README.md).
+The ArkTS package covers the complete portable C API surface, including Pipeline, FeatureHub, image bitmaps, aligned features, diagnostics, and hardware capability queries. Platform-inapplicable backends such as CUDA and CoreML remain callable for parity and report `UNSUPPORTED`. For ownership and complete API notes, see [HarmonyOS SDK documentation](harmony/inspireface/README.md).
 
 ### Linux-based NVIDIA GPU Acceleration with TensorRT Compilation
 

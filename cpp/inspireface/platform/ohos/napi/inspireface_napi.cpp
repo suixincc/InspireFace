@@ -1,6 +1,8 @@
 #include <napi/native_api.h>
 
 #include <algorithm>
+#include <atomic>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <exception>
@@ -18,10 +20,14 @@ namespace {
 
 constexpr napi_type_tag kSessionTypeTag = {0x8e68a46fd3b9460dULL, 0xa37adf709e45b06bULL};
 constexpr napi_type_tag kImageStreamTypeTag = {0x20e8d7e8040f43b1ULL, 0xa2d11c912ea59bbfULL};
+constexpr napi_type_tag kFaceResultTypeTag = {0xf8ea4a8ad49941ceULL, 0xbeb80ecf8b1752c8ULL};
+constexpr napi_type_tag kImageBitmapTypeTag = {0x6621012739bd4ffbULL, 0x95589cfc1170c5a2ULL};
+std::atomic<uint64_t> g_next_state_identity{1};
 
 struct SessionState {
     std::mutex mutex;
     HFSession handle = nullptr;
+    const uint64_t identity = g_next_state_identity.fetch_add(1, std::memory_order_relaxed);
 
     ~SessionState() {
         std::lock_guard<std::mutex> lock(mutex);
@@ -36,6 +42,7 @@ struct ImageStreamState {
     std::mutex mutex;
     std::vector<uint8_t> bytes;
     HFImageStream handle = nullptr;
+    const uint64_t identity = g_next_state_identity.fetch_add(1, std::memory_order_relaxed);
 
     ~ImageStreamState() {
         std::lock_guard<std::mutex> lock(mutex);
@@ -46,12 +53,30 @@ struct ImageStreamState {
     }
 };
 
-struct SnapshotGuard {
+struct FaceResultState {
+    std::mutex mutex;
     HFFaceResultSnapshot handle = nullptr;
+    uint64_t owner_session_identity = 0;
+    uint64_t owner_image_identity = 0;
 
-    ~SnapshotGuard() {
+    ~FaceResultState() {
+        std::lock_guard<std::mutex> lock(mutex);
         if (handle) {
             HFReleaseFaceResultSnapshot(handle);
+            handle = nullptr;
+        }
+    }
+};
+
+struct ImageBitmapState {
+    std::mutex mutex;
+    HFImageBitmap handle = nullptr;
+
+    ~ImageBitmapState() {
+        std::lock_guard<std::mutex> lock(mutex);
+        if (handle) {
+            HFReleaseImageBitmap(handle);
+            handle = nullptr;
         }
     }
 };
@@ -235,6 +260,55 @@ bool GetOptionalBool(napi_env env, napi_value object, const char* name, bool* va
     return true;
 }
 
+bool GetOptionalString(napi_env env, napi_value object, const char* name, std::string* value, bool* present) {
+    if (!value || !present) {
+        return false;
+    }
+    *present = false;
+    bool has_property = false;
+    if (!CheckNapi(env, napi_has_named_property(env, object, name, &has_property), "check string option")) {
+        return false;
+    }
+    if (!has_property) {
+        return true;
+    }
+    napi_value property = nullptr;
+    if (!CheckNapi(env, napi_get_named_property(env, object, name, &property), "read string option") ||
+        !ReadString(env, property, value)) {
+        return false;
+    }
+    *present = true;
+    return true;
+}
+
+bool GetRequiredInt32(napi_env env, napi_value object, const char* name, int32_t* value) {
+    bool present = false;
+    if (!GetOptionalInt32(env, object, name, value, &present)) {
+        return false;
+    }
+    if (!present) {
+        std::string message("Missing required integer property: ");
+        message += name;
+        napi_throw_type_error(env, "ERR_INSPIREFACE_ARGUMENT", message.c_str());
+        return false;
+    }
+    return true;
+}
+
+bool GetRequiredDouble(napi_env env, napi_value object, const char* name, double* value) {
+    bool present = false;
+    if (!GetOptionalDouble(env, object, name, value, &present)) {
+        return false;
+    }
+    if (!present) {
+        std::string message("Missing required numeric property: ");
+        message += name;
+        napi_throw_type_error(env, "ERR_INSPIREFACE_ARGUMENT", message.c_str());
+        return false;
+    }
+    return true;
+}
+
 template <typename State>
 void FinalizeState(napi_env, void* data, void*) {
     delete static_cast<State*>(data);
@@ -315,6 +389,42 @@ bool ReadFloat32View(napi_env env, napi_value value, float** data, size_t* lengt
     return true;
 }
 
+bool ReadFaceId(napi_env env, napi_value value, HFaceId* result) {
+    if (!result) {
+        return false;
+    }
+    napi_valuetype type = napi_undefined;
+    if (!CheckNapi(env, napi_typeof(env, value, &type), "read face ID type")) {
+        return false;
+    }
+    if (type == napi_bigint) {
+        bool lossless = false;
+        int64_t id = 0;
+        if (!CheckNapi(env, napi_get_value_bigint_int64(env, value, &id, &lossless), "read face ID") || !lossless) {
+            napi_throw_range_error(env, "ERR_INSPIREFACE_RANGE", "Face ID is outside the signed 64-bit range");
+            return false;
+        }
+        *result = static_cast<HFaceId>(id);
+        return true;
+    }
+    if (type == napi_number) {
+        double numeric_id = 0.0;
+        if (!CheckNapi(env, napi_get_value_double(env, value, &numeric_id), "read numeric face ID")) {
+            return false;
+        }
+        constexpr double kMaxSafeInteger = 9007199254740991.0;
+        if (!std::isfinite(numeric_id) || std::trunc(numeric_id) != numeric_id ||
+            std::abs(numeric_id) > kMaxSafeInteger) {
+            napi_throw_range_error(env, "ERR_INSPIREFACE_RANGE", "Numeric face ID must be a safe integer; use bigint for 64-bit IDs");
+            return false;
+        }
+        *result = static_cast<HFaceId>(numeric_id);
+        return true;
+    }
+    napi_throw_type_error(env, "ERR_INSPIREFACE_ARGUMENT", "Face ID must be a bigint or integer number");
+    return false;
+}
+
 napi_value CreateTypedArray(napi_env env, napi_typedarray_type type, const void* source, size_t element_count,
                             size_t element_size) {
     if (element_count > std::numeric_limits<size_t>::max() / element_size) {
@@ -350,6 +460,78 @@ bool SetDouble(napi_env env, napi_value object, const char* name, double value) 
     napi_value number = nullptr;
     return CheckNapi(env, napi_create_double(env, value, &number), "create number") &&
            CheckNapi(env, napi_set_named_property(env, object, name, number), "set number property");
+}
+
+bool SetBool(napi_env env, napi_value object, const char* name, bool value) {
+    napi_value boolean = nullptr;
+    return CheckNapi(env, napi_get_boolean(env, value, &boolean), "create boolean") &&
+           CheckNapi(env, napi_set_named_property(env, object, name, boolean), "set boolean property");
+}
+
+bool SetString(napi_env env, napi_value object, const char* name, const char* value) {
+    napi_value string = nullptr;
+    return CheckNapi(env, napi_create_string_utf8(env, value ? value : "", NAPI_AUTO_LENGTH, &string), "create string") &&
+           CheckNapi(env, napi_set_named_property(env, object, name, string), "set string property");
+}
+
+bool SetFaceId(napi_env env, napi_value object, const char* name, HFaceId value) {
+    napi_value bigint = nullptr;
+    return CheckNapi(env, napi_create_bigint_int64(env, static_cast<int64_t>(value), &bigint), "create face ID") &&
+           CheckNapi(env, napi_set_named_property(env, object, name, bigint), "set face ID property");
+}
+
+napi_value CreateFaceIdArray(napi_env env, const HFaceId* values, size_t count) {
+    napi_value array = nullptr;
+    if (!CheckNapi(env, napi_create_array_with_length(env, count, &array), "create face ID array")) {
+        return nullptr;
+    }
+    for (size_t index = 0; index < count; ++index) {
+        napi_value id = nullptr;
+        if (!CheckNapi(env, napi_create_bigint_int64(env, static_cast<int64_t>(values[index]), &id), "create face ID") ||
+            !CheckNapi(env, napi_set_element(env, array, static_cast<uint32_t>(index), id), "set face ID")) {
+            return nullptr;
+        }
+    }
+    return array;
+}
+
+bool SetFloatArray(napi_env env, napi_value object, const char* name, const float* values, int32_t count) {
+    if (count < 0 || (count > 0 && !values)) {
+        napi_throw_error(env, "ERR_INSPIREFACE_NATIVE", "SDK returned an invalid floating-point result array");
+        return false;
+    }
+    napi_value array = CreateTypedArray(env, napi_float32_array, values, static_cast<size_t>(count), sizeof(float));
+    return array && CheckNapi(env, napi_set_named_property(env, object, name, array), "set floating-point result array");
+}
+
+bool SetInt32Array(napi_env env, napi_value object, const char* name, const int32_t* values, int32_t count) {
+    if (count < 0 || (count > 0 && !values)) {
+        napi_throw_error(env, "ERR_INSPIREFACE_NATIVE", "SDK returned an invalid integer result array");
+        return false;
+    }
+    napi_value array = CreateTypedArray(env, napi_int32_array, values, static_cast<size_t>(count), sizeof(int32_t));
+    return array && CheckNapi(env, napi_set_named_property(env, object, name, array), "set integer result array");
+}
+
+template <typename Query>
+napi_value QuerySdkString(napi_env env, const char* operation, Query&& query) {
+    HInt32 required = 0;
+    HResult result = query(nullptr, 0, &required);
+    if (result != HSUCCEED) {
+        return ThrowSdkError(env, result, operation);
+    }
+    if (required <= 0 || required > 1024 * 1024) {
+        return ThrowRangeError(env, "SDK returned an invalid string size");
+    }
+    std::vector<char> buffer(static_cast<size_t>(required), '\0');
+    result = query(buffer.data(), required, &required);
+    if (result != HSUCCEED) {
+        return ThrowSdkError(env, result, operation);
+    }
+    napi_value string = nullptr;
+    return CheckNapi(env, napi_create_string_utf8(env, buffer.data(), NAPI_AUTO_LENGTH, &string), "create SDK string")
+             ? string
+             : nullptr;
 }
 
 napi_value Launch(napi_env env, napi_callback_info info) {
@@ -661,6 +843,333 @@ napi_value ReleaseImageStream(napi_env env, napi_callback_info info) {
     });
 }
 
+napi_value UpdateImageStream(napi_env env, napi_callback_info info) {
+    return GuardCallback(env, [&]() -> napi_value {
+        napi_value arguments[6] = {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr};
+        const uint8_t* source = nullptr;
+        size_t source_size = 0;
+        int32_t width = 0;
+        int32_t height = 0;
+        int32_t format_value = 0;
+        int32_t rotation_value = 0;
+        if (!ReadArguments(env, info, 6, arguments)) return nullptr;
+        ImageStreamState* state =
+          UnwrapState<ImageStreamState>(env, arguments[0], kImageStreamTypeTag, "Expected InspireFace image stream handle");
+        if (!state || !ReadUint8View(env, arguments[1], &source, &source_size) ||
+            !CheckNapi(env, napi_get_value_int32(env, arguments[2], &width), "read image width") ||
+            !CheckNapi(env, napi_get_value_int32(env, arguments[3], &height), "read image height") ||
+            !CheckNapi(env, napi_get_value_int32(env, arguments[4], &format_value), "read image format") ||
+            !CheckNapi(env, napi_get_value_int32(env, arguments[5], &rotation_value), "read image rotation")) {
+            return nullptr;
+        }
+        if (rotation_value < HF_CAMERA_ROTATION_0 || rotation_value > HF_CAMERA_ROTATION_270) {
+            return ThrowRangeError(env, "Unsupported image rotation");
+        }
+        std::vector<uint8_t> replacement;
+        const auto format = static_cast<HFImageFormat>(format_value);
+        if (!inspire::ohos::CopyExactImageBytes(source, source_size, format, width, height, &replacement)) {
+            return ThrowRangeError(env, "Image byte length, dimensions, or format are invalid");
+        }
+        std::lock_guard<std::mutex> lock(state->mutex);
+        if (!state->handle) return ThrowTypeError(env, "Image stream has already been released");
+        state->bytes.swap(replacement);
+        HResult result = HFImageStreamSetBuffer(state->handle, state->bytes.data(), width, height);
+        if (result != HSUCCEED) {
+            state->bytes.swap(replacement);
+            return ThrowSdkError(env, result, "update image stream buffer");
+        }
+        if (result == HSUCCEED) result = HFImageStreamSetFormat(state->handle, format);
+        if (result == HSUCCEED) result = HFImageStreamSetRotation(state->handle, static_cast<HFRotation>(rotation_value));
+        return result == HSUCCEED ? Undefined(env) : ThrowSdkError(env, result, "update image stream");
+    });
+}
+
+napi_value CreateImageBitmap(napi_env env, napi_callback_info info) {
+    return GuardCallback(env, [&]() -> napi_value {
+        napi_value arguments[4] = {nullptr, nullptr, nullptr, nullptr};
+        const uint8_t* source = nullptr;
+        size_t source_size = 0;
+        int32_t width = 0;
+        int32_t height = 0;
+        int32_t channels = 0;
+        if (!ReadArguments(env, info, 4, arguments) || !ReadUint8View(env, arguments[0], &source, &source_size) ||
+            !CheckNapi(env, napi_get_value_int32(env, arguments[1], &width), "read bitmap width") ||
+            !CheckNapi(env, napi_get_value_int32(env, arguments[2], &height), "read bitmap height") ||
+            !CheckNapi(env, napi_get_value_int32(env, arguments[3], &channels), "read bitmap channels")) {
+            return nullptr;
+        }
+        if (width <= 0 || height <= 0 || (channels != 1 && channels != 3)) {
+            return ThrowRangeError(env, "Bitmap dimensions or channels are invalid");
+        }
+        const size_t safe_width = static_cast<size_t>(width);
+        const size_t safe_height = static_cast<size_t>(height);
+        if (safe_width > std::numeric_limits<size_t>::max() / safe_height ||
+            safe_width * safe_height > std::numeric_limits<size_t>::max() / static_cast<size_t>(channels) ||
+            safe_width * safe_height * static_cast<size_t>(channels) != source_size) {
+            return ThrowRangeError(env, "Bitmap byte length does not match its dimensions");
+        }
+        HFImageBitmapData data{const_cast<uint8_t*>(source), width, height, channels};
+        auto* state = new (std::nothrow) ImageBitmapState();
+        if (!state) {
+            napi_throw_error(env, "ERR_INSPIREFACE_NO_MEMORY", "Unable to allocate image bitmap wrapper");
+            return nullptr;
+        }
+        const HResult result = HFCreateImageBitmap(&data, &state->handle);
+        if (result != HSUCCEED) {
+            delete state;
+            return ThrowSdkError(env, result, "create image bitmap");
+        }
+        return WrapState(env, state, kImageBitmapTypeTag);
+    });
+}
+
+napi_value CreateImageBitmapFromFile(napi_env env, napi_callback_info info) {
+    return GuardCallback(env, [&]() -> napi_value {
+        napi_value arguments[2] = {nullptr, nullptr};
+        std::string path;
+        int32_t channels = 0;
+        if (!ReadArguments(env, info, 2, arguments) || !ReadString(env, arguments[0], &path) ||
+            !CheckNapi(env, napi_get_value_int32(env, arguments[1], &channels), "read bitmap channels")) {
+            return nullptr;
+        }
+        auto* state = new (std::nothrow) ImageBitmapState();
+        if (!state) {
+            napi_throw_error(env, "ERR_INSPIREFACE_NO_MEMORY", "Unable to allocate image bitmap wrapper");
+            return nullptr;
+        }
+        const HResult result = HFCreateImageBitmapFromFilePath(path.c_str(), channels, &state->handle);
+        if (result != HSUCCEED) {
+            delete state;
+            return ThrowSdkError(env, result, "create image bitmap from file");
+        }
+        return WrapState(env, state, kImageBitmapTypeTag);
+    });
+}
+
+napi_value CopyImageBitmap(napi_env env, napi_callback_info info) {
+    return GuardCallback(env, [&]() -> napi_value {
+        napi_value arguments[1] = {nullptr};
+        if (!ReadArguments(env, info, 1, arguments)) return nullptr;
+        ImageBitmapState* source =
+          UnwrapState<ImageBitmapState>(env, arguments[0], kImageBitmapTypeTag, "Expected InspireFace image bitmap handle");
+        if (!source) return nullptr;
+        std::lock_guard<std::mutex> lock(source->mutex);
+        if (!source->handle) return ThrowTypeError(env, "Image bitmap has already been released");
+        auto* copy = new (std::nothrow) ImageBitmapState();
+        if (!copy) {
+            napi_throw_error(env, "ERR_INSPIREFACE_NO_MEMORY", "Unable to allocate image bitmap wrapper");
+            return nullptr;
+        }
+        const HResult result = HFImageBitmapCopy(source->handle, &copy->handle);
+        if (result != HSUCCEED) {
+            delete copy;
+            return ThrowSdkError(env, result, "copy image bitmap");
+        }
+        return WrapState(env, copy, kImageBitmapTypeTag);
+    });
+}
+
+napi_value ReleaseImageBitmap(napi_env env, napi_callback_info info) {
+    return GuardCallback(env, [&]() -> napi_value {
+        napi_value arguments[1] = {nullptr};
+        if (!ReadArguments(env, info, 1, arguments)) return nullptr;
+        ImageBitmapState* state =
+          UnwrapState<ImageBitmapState>(env, arguments[0], kImageBitmapTypeTag, "Expected InspireFace image bitmap handle");
+        if (!state) return nullptr;
+        std::lock_guard<std::mutex> lock(state->mutex);
+        if (!state->handle) return Undefined(env);
+        const HResult result = HFReleaseImageBitmap(state->handle);
+        if (result != HSUCCEED) return ThrowSdkError(env, result, "release image bitmap");
+        state->handle = nullptr;
+        return Undefined(env);
+    });
+}
+
+napi_value CreateImageStreamFromBitmap(napi_env env, napi_callback_info info) {
+    return GuardCallback(env, [&]() -> napi_value {
+        napi_value arguments[2] = {nullptr, nullptr};
+        int32_t rotation = 0;
+        if (!ReadArguments(env, info, 2, arguments) ||
+            !CheckNapi(env, napi_get_value_int32(env, arguments[1], &rotation), "read image rotation")) {
+            return nullptr;
+        }
+        ImageBitmapState* bitmap =
+          UnwrapState<ImageBitmapState>(env, arguments[0], kImageBitmapTypeTag, "Expected InspireFace image bitmap handle");
+        if (!bitmap) return nullptr;
+        std::lock_guard<std::mutex> lock(bitmap->mutex);
+        if (!bitmap->handle) return ThrowTypeError(env, "Image bitmap has already been released");
+        auto* stream = new (std::nothrow) ImageStreamState();
+        if (!stream) {
+            napi_throw_error(env, "ERR_INSPIREFACE_NO_MEMORY", "Unable to allocate image stream wrapper");
+            return nullptr;
+        }
+        const HResult result = HFCreateImageStreamFromImageBitmap(bitmap->handle, static_cast<HFRotation>(rotation),
+                                                                  &stream->handle);
+        if (result != HSUCCEED) {
+            delete stream;
+            return ThrowSdkError(env, result, "create image stream from bitmap");
+        }
+        return WrapState(env, stream, kImageStreamTypeTag);
+    });
+}
+
+napi_value CreateImageBitmapFromStream(napi_env env, napi_callback_info info) {
+    return GuardCallback(env, [&]() -> napi_value {
+        napi_value arguments[3] = {nullptr, nullptr, nullptr};
+        int32_t rotate = 0;
+        double scale = 1.0;
+        if (!ReadArguments(env, info, 3, arguments) ||
+            !CheckNapi(env, napi_get_value_int32(env, arguments[1], &rotate), "read bitmap rotation option") ||
+            !CheckNapi(env, napi_get_value_double(env, arguments[2], &scale), "read bitmap scale")) {
+            return nullptr;
+        }
+        ImageStreamState* stream =
+          UnwrapState<ImageStreamState>(env, arguments[0], kImageStreamTypeTag, "Expected InspireFace image stream handle");
+        if (!stream) return nullptr;
+        std::lock_guard<std::mutex> lock(stream->mutex);
+        if (!stream->handle) return ThrowTypeError(env, "Image stream has already been released");
+        auto* bitmap = new (std::nothrow) ImageBitmapState();
+        if (!bitmap) {
+            napi_throw_error(env, "ERR_INSPIREFACE_NO_MEMORY", "Unable to allocate image bitmap wrapper");
+            return nullptr;
+        }
+        const HResult result = HFCreateImageBitmapFromImageStreamProcess(stream->handle, &bitmap->handle, rotate,
+                                                                         static_cast<HFloat>(scale));
+        if (result != HSUCCEED) {
+            delete bitmap;
+            return ThrowSdkError(env, result, "create image bitmap from stream");
+        }
+        return WrapState(env, bitmap, kImageBitmapTypeTag);
+    });
+}
+
+napi_value GetImageBitmapData(napi_env env, napi_callback_info info) {
+    return GuardCallback(env, [&]() -> napi_value {
+        napi_value arguments[1] = {nullptr};
+        if (!ReadArguments(env, info, 1, arguments)) return nullptr;
+        ImageBitmapState* bitmap =
+          UnwrapState<ImageBitmapState>(env, arguments[0], kImageBitmapTypeTag, "Expected InspireFace image bitmap handle");
+        if (!bitmap) return nullptr;
+        std::lock_guard<std::mutex> lock(bitmap->mutex);
+        if (!bitmap->handle) return ThrowTypeError(env, "Image bitmap has already been released");
+        HFImageBitmapData data{};
+        const HResult result = HFImageBitmapGetData(bitmap->handle, &data);
+        if (result != HSUCCEED) return ThrowSdkError(env, result, "get image bitmap data");
+        if (data.width <= 0 || data.height <= 0 || data.channels <= 0) {
+            return ThrowSdkError(env, HERR_INVALID_PARAM, "get image bitmap data");
+        }
+        const size_t width = static_cast<size_t>(data.width);
+        const size_t height = static_cast<size_t>(data.height);
+        const size_t channels = static_cast<size_t>(data.channels);
+        if (width > std::numeric_limits<size_t>::max() / height || width * height > std::numeric_limits<size_t>::max() / channels) {
+            return ThrowRangeError(env, "Bitmap size overflow");
+        }
+        napi_value output = nullptr;
+        napi_value bytes = CreateTypedArray(env, napi_uint8_array, data.data, width * height * channels, sizeof(uint8_t));
+        if (!bytes || !CheckNapi(env, napi_create_object(env, &output), "create bitmap data") ||
+            !SetInt32(env, output, "width", data.width) || !SetInt32(env, output, "height", data.height) ||
+            !SetInt32(env, output, "channels", data.channels) ||
+            !CheckNapi(env, napi_set_named_property(env, output, "data", bytes), "set bitmap bytes")) {
+            return nullptr;
+        }
+        return output;
+    });
+}
+
+napi_value WriteImageBitmap(napi_env env, napi_callback_info info) {
+    return GuardCallback(env, [&]() -> napi_value {
+        napi_value arguments[2] = {nullptr, nullptr};
+        std::string path;
+        if (!ReadArguments(env, info, 2, arguments) || !ReadString(env, arguments[1], &path)) return nullptr;
+        ImageBitmapState* bitmap =
+          UnwrapState<ImageBitmapState>(env, arguments[0], kImageBitmapTypeTag, "Expected InspireFace image bitmap handle");
+        if (!bitmap) return nullptr;
+        std::lock_guard<std::mutex> lock(bitmap->mutex);
+        if (!bitmap->handle) return ThrowTypeError(env, "Image bitmap has already been released");
+        const HResult result = HFImageBitmapWriteToFile(bitmap->handle, path.c_str());
+        return result == HSUCCEED ? Undefined(env) : ThrowSdkError(env, result, "write image bitmap");
+    });
+}
+
+bool ReadColor(napi_env env, napi_value value, HColor* color) {
+    double r = 0.0;
+    double g = 0.0;
+    double b = 0.0;
+    if (!color || !GetRequiredDouble(env, value, "r", &r) || !GetRequiredDouble(env, value, "g", &g) ||
+        !GetRequiredDouble(env, value, "b", &b)) {
+        return false;
+    }
+    *color = {static_cast<float>(r), static_cast<float>(g), static_cast<float>(b)};
+    return true;
+}
+
+napi_value DrawImageBitmapRect(napi_env env, napi_callback_info info) {
+    return GuardCallback(env, [&]() -> napi_value {
+        napi_value arguments[4] = {nullptr, nullptr, nullptr, nullptr};
+        HFaceRect rect{};
+        HColor color{};
+        int32_t thickness = 0;
+        if (!ReadArguments(env, info, 4, arguments) || !GetRequiredInt32(env, arguments[1], "x", &rect.x) ||
+            !GetRequiredInt32(env, arguments[1], "y", &rect.y) ||
+            !GetRequiredInt32(env, arguments[1], "width", &rect.width) ||
+            !GetRequiredInt32(env, arguments[1], "height", &rect.height) || !ReadColor(env, arguments[2], &color) ||
+            !CheckNapi(env, napi_get_value_int32(env, arguments[3], &thickness), "read rectangle thickness")) {
+            return nullptr;
+        }
+        ImageBitmapState* bitmap =
+          UnwrapState<ImageBitmapState>(env, arguments[0], kImageBitmapTypeTag, "Expected InspireFace image bitmap handle");
+        if (!bitmap) return nullptr;
+        std::lock_guard<std::mutex> lock(bitmap->mutex);
+        if (!bitmap->handle) return ThrowTypeError(env, "Image bitmap has already been released");
+        const HResult result = HFImageBitmapDrawRect(bitmap->handle, rect, color, thickness);
+        return result == HSUCCEED ? Undefined(env) : ThrowSdkError(env, result, "draw bitmap rectangle");
+    });
+}
+
+napi_value DrawImageBitmapCircle(napi_env env, napi_callback_info info) {
+    return GuardCallback(env, [&]() -> napi_value {
+        napi_value arguments[5] = {nullptr, nullptr, nullptr, nullptr, nullptr};
+        HPoint2f point{};
+        HColor color{};
+        double x = 0.0;
+        double y = 0.0;
+        int32_t radius = 0;
+        int32_t thickness = 0;
+        if (!ReadArguments(env, info, 5, arguments) || !GetRequiredDouble(env, arguments[1], "x", &x) ||
+            !GetRequiredDouble(env, arguments[1], "y", &y) ||
+            !CheckNapi(env, napi_get_value_int32(env, arguments[2], &radius), "read circle radius") ||
+            !ReadColor(env, arguments[3], &color) ||
+            !CheckNapi(env, napi_get_value_int32(env, arguments[4], &thickness), "read circle thickness")) {
+            return nullptr;
+        }
+        point = {static_cast<float>(x), static_cast<float>(y)};
+        ImageBitmapState* bitmap =
+          UnwrapState<ImageBitmapState>(env, arguments[0], kImageBitmapTypeTag, "Expected InspireFace image bitmap handle");
+        if (!bitmap) return nullptr;
+        std::lock_guard<std::mutex> lock(bitmap->mutex);
+        if (!bitmap->handle) return ThrowTypeError(env, "Image bitmap has already been released");
+        const HResult result = HFImageBitmapDrawCircleF(bitmap->handle, point, radius, color, thickness);
+        return result == HSUCCEED ? Undefined(env) : ThrowSdkError(env, result, "draw bitmap circle");
+    });
+}
+
+napi_value ShowImageBitmap(napi_env env, napi_callback_info info) {
+    return GuardCallback(env, [&]() -> napi_value {
+        napi_value arguments[3] = {nullptr, nullptr, nullptr};
+        std::string title;
+        int32_t delay = 0;
+        if (!ReadArguments(env, info, 3, arguments) || !ReadString(env, arguments[1], &title) ||
+            !CheckNapi(env, napi_get_value_int32(env, arguments[2], &delay), "read bitmap display delay")) return nullptr;
+        ImageBitmapState* bitmap =
+          UnwrapState<ImageBitmapState>(env, arguments[0], kImageBitmapTypeTag, "Expected InspireFace image bitmap handle");
+        if (!bitmap) return nullptr;
+        std::lock_guard<std::mutex> lock(bitmap->mutex);
+        if (!bitmap->handle) return ThrowTypeError(env, "Image bitmap has already been released");
+        const HResult result = HFImageBitmapShow(bitmap->handle, const_cast<char*>(title.c_str()), delay);
+        return result == HSUCCEED ? Undefined(env) : ThrowSdkError(env, result, "show image bitmap");
+    });
+}
+
 napi_value Track(napi_env env, napi_callback_info info) {
     return GuardCallback(env, [&]() -> napi_value {
         napi_value arguments[2] = {nullptr, nullptr};
@@ -674,38 +1183,54 @@ napi_value Track(napi_env env, napi_callback_info info) {
             return nullptr;
         }
 
-        SnapshotGuard snapshot;
+        auto* snapshot = new (std::nothrow) FaceResultState();
+        if (!snapshot) {
+            napi_throw_error(env, "ERR_INSPIREFACE_NO_MEMORY", "Unable to allocate face result wrapper");
+            return nullptr;
+        }
         {
             std::unique_lock<std::mutex> session_lock(session->mutex, std::defer_lock);
             std::unique_lock<std::mutex> image_lock(image->mutex, std::defer_lock);
             std::lock(session_lock, image_lock);
             if (!session->handle || !image->handle) {
+                delete snapshot;
                 return ThrowTypeError(env, "Session or image stream has already been released");
             }
-            const HResult result = HFExecuteFaceTrackSnapshot(session->handle, image->handle, &snapshot.handle);
+            const HResult result = HFExecuteFaceTrackSnapshot(session->handle, image->handle, &snapshot->handle);
             if (result != HSUCCEED) {
+                delete snapshot;
                 return ThrowSdkError(env, result, "execute face track");
             }
+            snapshot->owner_session_identity = session->identity;
+            snapshot->owner_image_identity = image->identity;
         }
 
         HFMultipleFaceData faces{};
-        HResult result = HFGetFaceResultSnapshotData(snapshot.handle, &faces);
+        HResult result = HFGetFaceResultSnapshotData(snapshot->handle, &faces);
         if (result != HSUCCEED) {
+            delete snapshot;
             return ThrowSdkError(env, result, "read face track snapshot");
         }
         if (faces.detectedNum < 0) {
+            delete snapshot;
             return ThrowSdkError(env, HERR_INVALID_FACE_LIST, "read face track snapshot");
         }
         if (faces.detectedNum > 0 &&
             (!faces.rects || !faces.trackIds || !faces.trackCounts || !faces.detConfidence || !faces.angles.roll ||
              !faces.angles.yaw || !faces.angles.pitch || !faces.tokens)) {
+            delete snapshot;
             return ThrowSdkError(env, HERR_INVALID_FACE_LIST, "read face track snapshot");
         }
 
         napi_value output = nullptr;
         napi_value face_array = nullptr;
+        napi_value native_handle = WrapState(env, snapshot, kFaceResultTypeTag);
+        if (!native_handle) {
+            return nullptr;
+        }
         if (!CheckNapi(env, napi_create_object(env, &output), "create track result") ||
             !SetInt32(env, output, "detectedNum", faces.detectedNum) ||
+            !CheckNapi(env, napi_set_named_property(env, output, "handle", native_handle), "set face result handle") ||
             !CheckNapi(env, napi_create_array_with_length(env, static_cast<size_t>(faces.detectedNum), &face_array),
                        "create face array")) {
             return nullptr;
@@ -740,6 +1265,154 @@ napi_value Track(napi_env env, napi_callback_info info) {
             return nullptr;
         }
         return output;
+    });
+}
+
+napi_value ReleaseFaceResult(napi_env env, napi_callback_info info) {
+    return GuardCallback(env, [&]() -> napi_value {
+        napi_value arguments[1] = {nullptr};
+        if (!ReadArguments(env, info, 1, arguments)) {
+            return nullptr;
+        }
+        FaceResultState* state =
+          UnwrapState<FaceResultState>(env, arguments[0], kFaceResultTypeTag, "Expected InspireFace face result handle");
+        if (!state) {
+            return nullptr;
+        }
+        std::lock_guard<std::mutex> lock(state->mutex);
+        if (!state->handle) {
+            return Undefined(env);
+        }
+        const HResult result = HFReleaseFaceResultSnapshot(state->handle);
+        if (result != HSUCCEED) {
+            return ThrowSdkError(env, result, "release face result");
+        }
+        state->handle = nullptr;
+        return Undefined(env);
+    });
+}
+
+napi_value ProcessPipeline(napi_env env, napi_callback_info info) {
+    return GuardCallback(env, [&]() -> napi_value {
+        napi_value arguments[4] = {nullptr, nullptr, nullptr, nullptr};
+        if (!ReadArguments(env, info, 4, arguments)) {
+            return nullptr;
+        }
+        SessionState* session =
+          UnwrapState<SessionState>(env, arguments[0], kSessionTypeTag, "Expected InspireFace session handle");
+        ImageStreamState* image =
+          UnwrapState<ImageStreamState>(env, arguments[1], kImageStreamTypeTag, "Expected InspireFace image stream handle");
+        FaceResultState* face_result =
+          UnwrapState<FaceResultState>(env, arguments[2], kFaceResultTypeTag, "Expected InspireFace face result handle");
+        int64_t option = 0;
+        if (!session || !image || !face_result ||
+            !CheckNapi(env, napi_get_value_int64(env, arguments[3], &option), "read pipeline feature mask")) {
+            return nullptr;
+        }
+        if (option < 0) {
+            return ThrowRangeError(env, "Pipeline feature mask must be non-negative");
+        }
+        if (face_result->owner_session_identity != session->identity ||
+            face_result->owner_image_identity != image->identity) {
+            return ThrowTypeError(env, "Face result must be processed with the session and image that created it");
+        }
+
+        std::unique_lock<std::mutex> session_lock(session->mutex, std::defer_lock);
+        std::unique_lock<std::mutex> image_lock(image->mutex, std::defer_lock);
+        std::unique_lock<std::mutex> face_lock(face_result->mutex, std::defer_lock);
+        std::lock(session_lock, image_lock, face_lock);
+        if (!session->handle || !image->handle || !face_result->handle) {
+            return ThrowTypeError(env, "Session, image stream, or face result has already been released");
+        }
+
+        HFMultipleFaceData faces{};
+        HResult result = HFGetFaceResultSnapshotData(face_result->handle, &faces);
+        if (result != HSUCCEED) {
+            return ThrowSdkError(env, result, "read pipeline face result");
+        }
+        result = HFMultipleFacePipelineProcessOptional(session->handle, image->handle, &faces,
+                                                       static_cast<HOption>(option));
+        if (result != HSUCCEED) {
+            return ThrowSdkError(env, result, "process face pipeline");
+        }
+
+        HFRGBLivenessConfidence liveness{};
+        HFFaceMaskConfidence mask{};
+        HFFaceQualityConfidence quality{};
+        HFFaceInteractionState interaction{};
+        HFFaceInteractionsActions actions{};
+        HFFaceAttributeResult attributes{};
+        HFFaceEmotionResult emotion{};
+#define READ_PIPELINE_RESULT(call, output_name)                                      \
+    do {                                                                             \
+        result = (call);                                                              \
+        if (result != HSUCCEED) return ThrowSdkError(env, result, (output_name));    \
+    } while (false)
+        READ_PIPELINE_RESULT(HFGetRGBLivenessConfidence(session->handle, &liveness), "read RGB liveness result");
+        READ_PIPELINE_RESULT(HFGetFaceMaskConfidence(session->handle, &mask), "read mask result");
+        READ_PIPELINE_RESULT(HFGetFaceQualityConfidence(session->handle, &quality), "read quality result");
+        READ_PIPELINE_RESULT(HFGetFaceInteractionStateResult(session->handle, &interaction),
+                             "read interaction state result");
+        READ_PIPELINE_RESULT(HFGetFaceInteractionActionsResult(session->handle, &actions),
+                             "read interaction action result");
+        READ_PIPELINE_RESULT(HFGetFaceAttributeResult(session->handle, &attributes), "read face attribute result");
+        READ_PIPELINE_RESULT(HFGetFaceEmotionResult(session->handle, &emotion), "read face emotion result");
+#undef READ_PIPELINE_RESULT
+
+        napi_value output = nullptr;
+        if (!CheckNapi(env, napi_create_object(env, &output), "create pipeline result") ||
+            !SetInt32(env, output, "detectedNum", faces.detectedNum) ||
+            !SetFloatArray(env, output, "rgbLiveness", liveness.confidence, liveness.num) ||
+            !SetFloatArray(env, output, "maskConfidence", mask.confidence, mask.num) ||
+            !SetFloatArray(env, output, "qualityConfidence", quality.confidence, quality.num) ||
+            !SetFloatArray(env, output, "leftEyeStatusConfidence", interaction.leftEyeStatusConfidence,
+                           interaction.num) ||
+            !SetFloatArray(env, output, "rightEyeStatusConfidence", interaction.rightEyeStatusConfidence,
+                           interaction.num) ||
+            !SetInt32Array(env, output, "normal", actions.normal, actions.num) ||
+            !SetInt32Array(env, output, "shake", actions.shake, actions.num) ||
+            !SetInt32Array(env, output, "jawOpen", actions.jawOpen, actions.num) ||
+            !SetInt32Array(env, output, "headRaise", actions.headRaise, actions.num) ||
+            !SetInt32Array(env, output, "blink", actions.blink, actions.num) ||
+            !SetInt32Array(env, output, "race", attributes.race, attributes.num) ||
+            !SetInt32Array(env, output, "gender", attributes.gender, attributes.num) ||
+            !SetInt32Array(env, output, "ageBracket", attributes.ageBracket, attributes.num) ||
+            !SetInt32Array(env, output, "emotion", emotion.emotion, emotion.num)) {
+            return nullptr;
+        }
+        return output;
+    });
+}
+
+napi_value DetectFaceQuality(napi_env env, napi_callback_info info) {
+    return GuardCallback(env, [&]() -> napi_value {
+        napi_value arguments[2] = {nullptr, nullptr};
+        if (!ReadArguments(env, info, 2, arguments)) {
+            return nullptr;
+        }
+        SessionState* session =
+          UnwrapState<SessionState>(env, arguments[0], kSessionTypeTag, "Expected InspireFace session handle");
+        const uint8_t* token_data = nullptr;
+        size_t token_size = 0;
+        if (!session || !ReadUint8View(env, arguments[1], &token_data, &token_size)) {
+            return nullptr;
+        }
+        if (token_size > static_cast<size_t>(std::numeric_limits<HInt32>::max())) {
+            return ThrowRangeError(env, "Face token is too large");
+        }
+        std::lock_guard<std::mutex> lock(session->mutex);
+        if (!session->handle) {
+            return ThrowTypeError(env, "Session has already been released");
+        }
+        HFFaceBasicToken token{static_cast<HInt32>(token_size), const_cast<uint8_t*>(token_data)};
+        HFloat confidence = 0.0f;
+        const HResult result = HFFaceQualityDetect(session->handle, token, &confidence);
+        if (result != HSUCCEED) {
+            return ThrowSdkError(env, result, "detect face quality");
+        }
+        napi_value number = nullptr;
+        return CheckNapi(env, napi_create_double(env, confidence, &number), "create quality confidence") ? number
+                                                                                                         : nullptr;
     });
 }
 
@@ -823,6 +1496,72 @@ napi_value ExtractFeature(napi_env env, napi_callback_info info) {
             copied_feature.assign(feature.data, feature.data + feature.size);
         }
         return CreateTypedArray(env, napi_float32_array, copied_feature.data(), copied_feature.size(), sizeof(float));
+    });
+}
+
+napi_value GetFaceAlignmentImage(napi_env env, napi_callback_info info) {
+    return GuardCallback(env, [&]() -> napi_value {
+        napi_value arguments[3] = {nullptr, nullptr, nullptr};
+        SessionState* session = nullptr;
+        ImageStreamState* image = nullptr;
+        const uint8_t* token_data = nullptr;
+        size_t token_size = 0;
+        if (!ReadArguments(env, info, 3, arguments) ||
+            !(session = UnwrapState<SessionState>(env, arguments[0], kSessionTypeTag,
+                                                  "Expected InspireFace session handle")) ||
+            !(image = UnwrapState<ImageStreamState>(env, arguments[1], kImageStreamTypeTag,
+                                                    "Expected InspireFace image stream handle")) ||
+            !ReadUint8View(env, arguments[2], &token_data, &token_size)) {
+            return nullptr;
+        }
+        if (token_size > static_cast<size_t>(std::numeric_limits<HInt32>::max())) {
+            return ThrowRangeError(env, "Face token is too large");
+        }
+        HFFaceBasicToken token{static_cast<HInt32>(token_size), const_cast<uint8_t*>(token_data)};
+        std::unique_lock<std::mutex> session_lock(session->mutex, std::defer_lock);
+        std::unique_lock<std::mutex> image_lock(image->mutex, std::defer_lock);
+        std::lock(session_lock, image_lock);
+        if (!session->handle || !image->handle) {
+            return ThrowTypeError(env, "Session or image stream has already been released");
+        }
+        auto* bitmap = new (std::nothrow) ImageBitmapState();
+        if (!bitmap) {
+            napi_throw_error(env, "ERR_INSPIREFACE_NO_MEMORY", "Unable to allocate image bitmap wrapper");
+            return nullptr;
+        }
+        const HResult result = HFFaceGetFaceAlignmentImage(session->handle, image->handle, token, &bitmap->handle);
+        if (result != HSUCCEED) {
+            delete bitmap;
+            return ThrowSdkError(env, result, "get face alignment image");
+        }
+        return WrapState(env, bitmap, kImageBitmapTypeTag);
+    });
+}
+
+napi_value ExtractFeatureFromAlignmentImage(napi_env env, napi_callback_info info) {
+    return GuardCallback(env, [&]() -> napi_value {
+        napi_value arguments[2] = {nullptr, nullptr};
+        if (!ReadArguments(env, info, 2, arguments)) return nullptr;
+        SessionState* session =
+          UnwrapState<SessionState>(env, arguments[0], kSessionTypeTag, "Expected InspireFace session handle");
+        ImageStreamState* image =
+          UnwrapState<ImageStreamState>(env, arguments[1], kImageStreamTypeTag, "Expected InspireFace image stream handle");
+        if (!session || !image) return nullptr;
+        HInt32 feature_length = 0;
+        HResult result = HFGetFeatureLength(&feature_length);
+        if (result != HSUCCEED) return ThrowSdkError(env, result, "query feature length");
+        if (feature_length <= 0) return ThrowRangeError(env, "SDK returned an invalid feature length");
+        std::vector<float> feature_data(static_cast<size_t>(feature_length));
+        HFFaceFeature feature{feature_length, feature_data.data()};
+        std::unique_lock<std::mutex> session_lock(session->mutex, std::defer_lock);
+        std::unique_lock<std::mutex> image_lock(image->mutex, std::defer_lock);
+        std::lock(session_lock, image_lock);
+        if (!session->handle || !image->handle) {
+            return ThrowTypeError(env, "Session or image stream has already been released");
+        }
+        result = HFFaceFeatureExtractWithAlignmentImage(session->handle, image->handle, feature);
+        if (result != HSUCCEED) return ThrowSdkError(env, result, "extract feature from alignment image");
+        return CreateTypedArray(env, napi_float32_array, feature_data.data(), feature_data.size(), sizeof(float));
     });
 }
 
@@ -929,8 +1668,662 @@ napi_value DisableLog(napi_env env, napi_callback_info info) {
     });
 }
 
+napi_value GetErrorMessage(napi_env env, napi_callback_info info) {
+    return GuardCallback(env, [&]() -> napi_value {
+        napi_value arguments[1] = {nullptr};
+        int32_t code = 0;
+        if (!ReadArguments(env, info, 1, arguments) ||
+            !CheckNapi(env, napi_get_value_int32(env, arguments[0], &code), "read error code")) {
+            return nullptr;
+        }
+        const std::string message = GetSdkErrorMessage(code);
+        napi_value value = nullptr;
+        return CheckNapi(env, napi_create_string_utf8(env, message.c_str(), NAPI_AUTO_LENGTH, &value),
+                         "create error message")
+                 ? value
+                 : nullptr;
+    });
+}
+
+napi_value ValidateResourcePack(napi_env env, napi_callback_info info) {
+    return GuardCallback(env, [&]() -> napi_value {
+        napi_value arguments[1] = {nullptr};
+        std::string path;
+        if (!ReadArguments(env, info, 1, arguments) || !ReadString(env, arguments[0], &path)) {
+            return nullptr;
+        }
+        HFResourcePackInfo resource{};
+        resource.structSize = sizeof(resource);
+        resource.structVersion = HF_RESOURCE_PACK_INFO_VERSION;
+        const HResult result = HFValidateResourcePack(path.c_str(), &resource);
+        if (result != HSUCCEED) {
+            return ThrowSdkError(env, result, "validate resource pack");
+        }
+        napi_value output = nullptr;
+        if (!CheckNapi(env, napi_create_object(env, &output), "create resource metadata") ||
+            !SetInt32(env, output, "archiveFileCount", static_cast<int32_t>(resource.archiveFileCount)) ||
+            !SetInt32(env, output, "modelCount", static_cast<int32_t>(resource.modelCount)) ||
+            !SetString(env, output, "tag", resource.tag) || !SetString(env, output, "version", resource.version) ||
+            !SetString(env, output, "major", resource.major) || !SetString(env, output, "releaseDate", resource.releaseDate)) {
+            return nullptr;
+        }
+        return output;
+    });
+}
+
+napi_value GetSupportedPixelLevels(napi_env env, napi_callback_info info) {
+    return GuardCallback(env, [&]() -> napi_value {
+        if (!ReadArguments(env, info, 0, nullptr)) {
+            return nullptr;
+        }
+        HFFaceDetectPixelList levels{};
+        const HResult result = HFQuerySupportedPixelLevelsForFaceDetection(&levels);
+        if (result != HSUCCEED) {
+            return ThrowSdkError(env, result, "query supported face detection pixel levels");
+        }
+        if (levels.size < 0 || levels.size > 20) {
+            return ThrowSdkError(env, HERR_INVALID_PARAM, "query supported face detection pixel levels");
+        }
+        return CreateTypedArray(env, napi_int32_array, levels.pixel_level, static_cast<size_t>(levels.size),
+                                sizeof(int32_t));
+    });
+}
+
+napi_value SwitchLandmarkEngine(napi_env env, napi_callback_info info) {
+    return GuardCallback(env, [&]() -> napi_value {
+        napi_value arguments[1] = {nullptr};
+        int32_t engine = 0;
+        if (!ReadArguments(env, info, 1, arguments) ||
+            !CheckNapi(env, napi_get_value_int32(env, arguments[0], &engine), "read landmark engine")) {
+            return nullptr;
+        }
+        const HResult result = HFSwitchLandmarkEngine(static_cast<HFSessionLandmarkEngine>(engine));
+        return result == HSUCCEED ? Undefined(env) : ThrowSdkError(env, result, "switch landmark engine");
+    });
+}
+
+napi_value GetSessionPreviewSize(napi_env env, napi_callback_info info) {
+    return GuardCallback(env, [&]() -> napi_value {
+        napi_value arguments[1] = {nullptr};
+        if (!ReadArguments(env, info, 1, arguments)) {
+            return nullptr;
+        }
+        SessionState* session =
+          UnwrapState<SessionState>(env, arguments[0], kSessionTypeTag, "Expected InspireFace session handle");
+        if (!session) {
+            return nullptr;
+        }
+        std::lock_guard<std::mutex> lock(session->mutex);
+        if (!session->handle) {
+            return ThrowTypeError(env, "Session has already been released");
+        }
+        HInt32 preview_size = 0;
+        const HResult result = HFSessionGetTrackPreviewSize(session->handle, &preview_size);
+        if (result != HSUCCEED) {
+            return ThrowSdkError(env, result, "get session preview size");
+        }
+        napi_value number = nullptr;
+        return CheckNapi(env, napi_create_int32(env, preview_size, &number), "create preview size") ? number : nullptr;
+    });
+}
+
+napi_value GetLastDetectionDebugPreviewSize(napi_env env, napi_callback_info info) {
+    return GuardCallback(env, [&]() -> napi_value {
+        napi_value arguments[1] = {nullptr};
+        if (!ReadArguments(env, info, 1, arguments)) return nullptr;
+        SessionState* session =
+          UnwrapState<SessionState>(env, arguments[0], kSessionTypeTag, "Expected InspireFace session handle");
+        if (!session) return nullptr;
+        std::lock_guard<std::mutex> lock(session->mutex);
+        if (!session->handle) return ThrowTypeError(env, "Session has already been released");
+        HInt32 size = 0;
+        const HResult result = HFSessionLastFaceDetectionGetDebugPreviewImageSize(session->handle, &size);
+        if (result != HSUCCEED) return ThrowSdkError(env, result, "get last detection debug preview size");
+        napi_value output = nullptr;
+        return CheckNapi(env, napi_create_int32(env, size, &output), "create debug preview size") ? output : nullptr;
+    });
+}
+
+napi_value GetSimilarityConverter(napi_env env, napi_callback_info info) {
+    return GuardCallback(env, [&]() -> napi_value {
+        if (!ReadArguments(env, info, 0, nullptr)) {
+            return nullptr;
+        }
+        HFSimilarityConverterConfig config{};
+        const HResult result = HFGetCosineSimilarityConverter(&config);
+        if (result != HSUCCEED) {
+            return ThrowSdkError(env, result, "get similarity converter");
+        }
+        napi_value output = nullptr;
+        if (!CheckNapi(env, napi_create_object(env, &output), "create similarity converter") ||
+            !SetDouble(env, output, "threshold", config.threshold) ||
+            !SetDouble(env, output, "middleScore", config.middleScore) ||
+            !SetDouble(env, output, "steepness", config.steepness) ||
+            !SetDouble(env, output, "outputMin", config.outputMin) ||
+            !SetDouble(env, output, "outputMax", config.outputMax)) {
+            return nullptr;
+        }
+        return output;
+    });
+}
+
+napi_value UpdateSimilarityConverter(napi_env env, napi_callback_info info) {
+    return GuardCallback(env, [&]() -> napi_value {
+        napi_value arguments[1] = {nullptr};
+        if (!ReadArguments(env, info, 1, arguments)) {
+            return nullptr;
+        }
+        HFSimilarityConverterConfig config{};
+        double value = 0.0;
+        bool present = false;
+#define READ_REQUIRED_FLOAT(name, field)                                                       \
+    do {                                                                                        \
+        if (!GetOptionalDouble(env, arguments[0], (name), &value, &present)) return nullptr;   \
+        if (!present) return ThrowTypeError(env, "Similarity converter requires all fields"); \
+        config.field = static_cast<HFloat>(value);                                              \
+    } while (false)
+        READ_REQUIRED_FLOAT("threshold", threshold);
+        READ_REQUIRED_FLOAT("middleScore", middleScore);
+        READ_REQUIRED_FLOAT("steepness", steepness);
+        READ_REQUIRED_FLOAT("outputMin", outputMin);
+        READ_REQUIRED_FLOAT("outputMax", outputMax);
+#undef READ_REQUIRED_FLOAT
+        const HResult result = HFUpdateCosineSimilarityConverter(config);
+        return result == HSUCCEED ? Undefined(env) : ThrowSdkError(env, result, "update similarity converter");
+    });
+}
+
+napi_value FeatureHubEnable(napi_env env, napi_callback_info info) {
+    return GuardCallback(env, [&]() -> napi_value {
+        napi_value arguments[1] = {nullptr};
+        if (!ReadArguments(env, info, 1, arguments)) {
+            return nullptr;
+        }
+        HFFeatureHubConfiguration config{};
+        config.primaryKeyMode = HF_PK_AUTO_INCREMENT;
+        config.enablePersistence = 0;
+        config.persistenceDbPath = nullptr;
+        config.searchThreshold = -1.0f;
+        config.searchMode = HF_SEARCH_MODE_EXHAUSTIVE;
+        bool present = false;
+        bool enabled = false;
+        int32_t integer = 0;
+        double decimal = 0.0;
+        std::string path;
+        if (!GetOptionalInt32(env, arguments[0], "primaryKeyMode", &integer, &present)) return nullptr;
+        if (present) config.primaryKeyMode = static_cast<HFPKMode>(integer);
+        if (!GetOptionalBool(env, arguments[0], "enablePersistence", &enabled, &present)) return nullptr;
+        if (present) config.enablePersistence = enabled ? 1 : 0;
+        if (!GetOptionalString(env, arguments[0], "persistenceDbPath", &path, &present)) return nullptr;
+        if (present) config.persistenceDbPath = const_cast<char*>(path.c_str());
+        if (!GetOptionalDouble(env, arguments[0], "searchThreshold", &decimal, &present)) return nullptr;
+        if (present) config.searchThreshold = static_cast<HFloat>(decimal);
+        if (!GetOptionalInt32(env, arguments[0], "searchMode", &integer, &present)) return nullptr;
+        if (present) config.searchMode = static_cast<HFSearchMode>(integer);
+        const HResult result = HFFeatureHubDataEnable(config);
+        return result == HSUCCEED ? Undefined(env) : ThrowSdkError(env, result, "enable FeatureHub");
+    });
+}
+
+napi_value FeatureHubDisable(napi_env env, napi_callback_info info) {
+    return GuardCallback(env, [&]() -> napi_value {
+        if (!ReadArguments(env, info, 0, nullptr)) return nullptr;
+        const HResult result = HFFeatureHubDataDisable();
+        return result == HSUCCEED ? Undefined(env) : ThrowSdkError(env, result, "disable FeatureHub");
+    });
+}
+
+napi_value FeatureHubViewTable(napi_env env, napi_callback_info info) {
+    return GuardCallback(env, [&]() -> napi_value {
+        if (!ReadArguments(env, info, 0, nullptr)) return nullptr;
+        const HResult result = HFFeatureHubViewDBTable();
+        return result == HSUCCEED ? Undefined(env) : ThrowSdkError(env, result, "view FeatureHub table");
+    });
+}
+
+napi_value FeatureHubSetThreshold(napi_env env, napi_callback_info info) {
+    return GuardCallback(env, [&]() -> napi_value {
+        napi_value arguments[1] = {nullptr};
+        double threshold = 0.0;
+        if (!ReadArguments(env, info, 1, arguments) ||
+            !CheckNapi(env, napi_get_value_double(env, arguments[0], &threshold), "read FeatureHub threshold")) {
+            return nullptr;
+        }
+        const HResult result = HFFeatureHubFaceSearchThresholdSetting(static_cast<HFloat>(threshold));
+        return result == HSUCCEED ? Undefined(env) : ThrowSdkError(env, result, "set FeatureHub threshold");
+    });
+}
+
+bool ReadFeature(napi_env env, napi_value value, HFFaceFeature* feature) {
+    float* data = nullptr;
+    size_t size = 0;
+    if (!feature || !ReadFloat32View(env, value, &data, &size)) {
+        return false;
+    }
+    if (size > static_cast<size_t>(std::numeric_limits<HInt32>::max())) {
+        napi_throw_range_error(env, "ERR_INSPIREFACE_RANGE", "Face feature is too large");
+        return false;
+    }
+    feature->size = static_cast<HInt32>(size);
+    feature->data = data;
+    return true;
+}
+
+napi_value FeatureHubInsert(napi_env env, napi_callback_info info) {
+    return GuardCallback(env, [&]() -> napi_value {
+        napi_value arguments[2] = {nullptr, nullptr};
+        HFaceId id = HF_INVALID_FACE_ID;
+        HFFaceFeature feature{};
+        if (!ReadArguments(env, info, 2, arguments) || !ReadFaceId(env, arguments[0], &id) ||
+            !ReadFeature(env, arguments[1], &feature)) {
+            return nullptr;
+        }
+        HFFaceFeatureIdentity identity{id, &feature};
+        HFaceId allocated = HF_INVALID_FACE_ID;
+        const HResult result = HFFeatureHubInsertFeature(identity, &allocated);
+        if (result != HSUCCEED) {
+            return ThrowSdkError(env, result, "insert FeatureHub feature");
+        }
+        napi_value output = nullptr;
+        return CheckNapi(env, napi_create_bigint_int64(env, static_cast<int64_t>(allocated), &output), "create allocated face ID")
+                 ? output
+                 : nullptr;
+    });
+}
+
+napi_value FeatureHubUpdate(napi_env env, napi_callback_info info) {
+    return GuardCallback(env, [&]() -> napi_value {
+        napi_value arguments[2] = {nullptr, nullptr};
+        HFaceId id = HF_INVALID_FACE_ID;
+        HFFaceFeature feature{};
+        if (!ReadArguments(env, info, 2, arguments) || !ReadFaceId(env, arguments[0], &id) ||
+            !ReadFeature(env, arguments[1], &feature)) {
+            return nullptr;
+        }
+        HFFaceFeatureIdentity identity{id, &feature};
+        const HResult result = HFFeatureHubFaceUpdate(identity);
+        return result == HSUCCEED ? Undefined(env) : ThrowSdkError(env, result, "update FeatureHub feature");
+    });
+}
+
+napi_value FeatureHubRemove(napi_env env, napi_callback_info info) {
+    return GuardCallback(env, [&]() -> napi_value {
+        napi_value arguments[1] = {nullptr};
+        HFaceId id = HF_INVALID_FACE_ID;
+        if (!ReadArguments(env, info, 1, arguments) || !ReadFaceId(env, arguments[0], &id)) return nullptr;
+        const HResult result = HFFeatureHubFaceRemove(id);
+        return result == HSUCCEED ? Undefined(env) : ThrowSdkError(env, result, "remove FeatureHub feature");
+    });
+}
+
+napi_value FeatureHubGet(napi_env env, napi_callback_info info) {
+    return GuardCallback(env, [&]() -> napi_value {
+        napi_value arguments[1] = {nullptr};
+        HFaceId id = HF_INVALID_FACE_ID;
+        if (!ReadArguments(env, info, 1, arguments) || !ReadFaceId(env, arguments[0], &id)) return nullptr;
+        HFFaceFeatureIdentity identity{};
+        const HResult result = HFFeatureHubGetFaceIdentity(id, &identity);
+        if (result != HSUCCEED) return ThrowSdkError(env, result, "get FeatureHub feature");
+        if (!identity.feature || identity.feature->size < 0 ||
+            (identity.feature->size > 0 && !identity.feature->data)) {
+            return ThrowSdkError(env, HERR_FT_HUB_INVALID_FEATURE, "get FeatureHub feature");
+        }
+        return CreateTypedArray(env, napi_float32_array, identity.feature->data,
+                                static_cast<size_t>(identity.feature->size), sizeof(float));
+    });
+}
+
+napi_value FeatureHubGetCount(napi_env env, napi_callback_info info) {
+    return GuardCallback(env, [&]() -> napi_value {
+        if (!ReadArguments(env, info, 0, nullptr)) return nullptr;
+        HInt32 count = 0;
+        const HResult result = HFFeatureHubGetFaceCount(&count);
+        if (result != HSUCCEED) return ThrowSdkError(env, result, "get FeatureHub count");
+        napi_value output = nullptr;
+        return CheckNapi(env, napi_create_int32(env, count, &output), "create FeatureHub count") ? output : nullptr;
+    });
+}
+
+napi_value FeatureHubGetIds(napi_env env, napi_callback_info info) {
+    return GuardCallback(env, [&]() -> napi_value {
+        if (!ReadArguments(env, info, 0, nullptr)) return nullptr;
+        HFFeatureHubExistingIds ids{};
+        const HResult result = HFFeatureHubGetExistingIds(&ids);
+        if (result != HSUCCEED) return ThrowSdkError(env, result, "get FeatureHub IDs");
+        if (ids.size < 0 || (ids.size > 0 && !ids.ids)) {
+            return ThrowSdkError(env, HERR_INVALID_PARAM, "get FeatureHub IDs");
+        }
+        return CreateFaceIdArray(env, ids.ids, static_cast<size_t>(ids.size));
+    });
+}
+
+napi_value FeatureHubSearch(napi_env env, napi_callback_info info) {
+    return GuardCallback(env, [&]() -> napi_value {
+        napi_value arguments[1] = {nullptr};
+        HFFaceFeature feature{};
+        if (!ReadArguments(env, info, 1, arguments) || !ReadFeature(env, arguments[0], &feature)) return nullptr;
+        HFFeatureHubSearchResultV2 result{};
+        const HResult status = HFFeatureHubFaceSearchV2(feature, &result);
+        if (status != HSUCCEED) return ThrowSdkError(env, status, "search FeatureHub");
+        if (result.feature.size < 0 || (result.feature.size > 0 && !result.feature.data)) {
+            return ThrowSdkError(env, HERR_FT_HUB_INVALID_FEATURE, "search FeatureHub");
+        }
+        napi_value output = nullptr;
+        if (!CheckNapi(env, napi_create_object(env, &output), "create FeatureHub search result") ||
+            !SetBool(env, output, "found", result.found != 0) || !SetFaceId(env, output, "id", result.id) ||
+            !SetDouble(env, output, "confidence", result.confidence)) {
+            return nullptr;
+        }
+        napi_value matched = CreateTypedArray(env, napi_float32_array, result.feature.data,
+                                              static_cast<size_t>(result.feature.size), sizeof(float));
+        if (!matched || !CheckNapi(env, napi_set_named_property(env, output, "feature", matched),
+                                   "set FeatureHub matched feature")) {
+            return nullptr;
+        }
+        return output;
+    });
+}
+
+napi_value FeatureHubSearchTopK(napi_env env, napi_callback_info info) {
+    return GuardCallback(env, [&]() -> napi_value {
+        napi_value arguments[2] = {nullptr, nullptr};
+        HFFaceFeature feature{};
+        int32_t top_k = 0;
+        if (!ReadArguments(env, info, 2, arguments) || !ReadFeature(env, arguments[0], &feature) ||
+            !CheckNapi(env, napi_get_value_int32(env, arguments[1], &top_k), "read FeatureHub topK")) {
+            return nullptr;
+        }
+        HFSearchTopKResults results{};
+        const HResult status = HFFeatureHubFaceSearchTopK(feature, top_k, &results);
+        if (status != HSUCCEED) return ThrowSdkError(env, status, "search FeatureHub topK");
+        if (results.size < 0 || (results.size > 0 && (!results.ids || !results.confidence))) {
+            return ThrowSdkError(env, HERR_INVALID_PARAM, "search FeatureHub topK");
+        }
+        napi_value output = nullptr;
+        napi_value ids = CreateFaceIdArray(env, results.ids, static_cast<size_t>(results.size));
+        napi_value confidence = CreateTypedArray(env, napi_float32_array, results.confidence,
+                                                 static_cast<size_t>(results.size), sizeof(float));
+        if (!ids || !confidence || !CheckNapi(env, napi_create_object(env, &output), "create topK result") ||
+            !CheckNapi(env, napi_set_named_property(env, output, "ids", ids), "set topK IDs") ||
+            !CheckNapi(env, napi_set_named_property(env, output, "confidence", confidence), "set topK confidence")) {
+            return nullptr;
+        }
+        return output;
+    });
+}
+
+napi_value GetComponentVersion(napi_env env, napi_callback_info info) {
+    return GuardCallback(env, [&]() -> napi_value {
+        napi_value arguments[1] = {nullptr};
+        int32_t component = 0;
+        if (!ReadArguments(env, info, 1, arguments) ||
+            !CheckNapi(env, napi_get_value_int32(env, arguments[0], &component), "read component type")) {
+            return nullptr;
+        }
+        HFComponentVersion version{};
+        const HResult result = HFQueryInspireFaceComponentVersion(static_cast<HFComponentType>(component), &version);
+        if (result != HSUCCEED) return ThrowSdkError(env, result, "query component version");
+        napi_value output = nullptr;
+        if (!CheckNapi(env, napi_create_object(env, &output), "create component version") ||
+            !SetInt32(env, output, "major", version.major) || !SetInt32(env, output, "minor", version.minor) ||
+            !SetInt32(env, output, "patch", version.patch) || !SetInt32(env, output, "state", version.state)) {
+            return nullptr;
+        }
+        return output;
+    });
+}
+
+napi_value GetComponentVersions(napi_env env, napi_callback_info info) {
+    return GuardCallback(env, [&]() -> napi_value {
+        if (!ReadArguments(env, info, 0, nullptr)) return nullptr;
+        return QuerySdkString(env, "query component versions", HFQueryInspireFaceComponentVersions);
+    });
+}
+
+napi_value GetDiagnosticInformation(napi_env env, napi_callback_info info) {
+    return GuardCallback(env, [&]() -> napi_value {
+        if (!ReadArguments(env, info, 0, nullptr)) return nullptr;
+        return QuerySdkString(env, "query diagnostic information", HFQueryInspireFaceDiagnosticInformation);
+    });
+}
+
+napi_value GetExtendedInformation(napi_env env, napi_callback_info info) {
+    return GuardCallback(env, [&]() -> napi_value {
+        if (!ReadArguments(env, info, 0, nullptr)) return nullptr;
+        HFInspireFaceExtendedInformation information{};
+        const HResult result = HFQueryInspireFaceExtendedInformation(&information);
+        if (result != HSUCCEED) return ThrowSdkError(env, result, "query extended information");
+        napi_value output = nullptr;
+        return CheckNapi(env, napi_create_string_utf8(env, information.information, NAPI_AUTO_LENGTH, &output),
+                         "create extended information")
+                 ? output
+                 : nullptr;
+    });
+}
+
+napi_value QueryRgaEnabled(napi_env env, napi_callback_info info) {
+    return GuardCallback(env, [&]() -> napi_value {
+        if (!ReadArguments(env, info, 0, nullptr)) return nullptr;
+        HInt32 enabled = 0;
+        const HResult result = HFQueryExpansiveHardwareRGACompileOption(&enabled);
+        if (result != HSUCCEED) return ThrowSdkError(env, result, "query RGA support");
+        napi_value output = nullptr;
+        return CheckNapi(env, napi_get_boolean(env, enabled != 0, &output), "create RGA support status") ? output : nullptr;
+    });
+}
+
+napi_value SetRgaDmaHeapPath(napi_env env, napi_callback_info info) {
+    return GuardCallback(env, [&]() -> napi_value {
+        napi_value arguments[1] = {nullptr};
+        std::string path;
+        if (!ReadArguments(env, info, 1, arguments) || !ReadString(env, arguments[0], &path)) return nullptr;
+        const HResult result = HFSetExpansiveHardwareRockchipDmaHeapPath(path.c_str());
+        return result == HSUCCEED ? Undefined(env) : ThrowSdkError(env, result, "set RGA DMA heap path");
+    });
+}
+
+napi_value GetRgaDmaHeapPath(napi_env env, napi_callback_info info) {
+    return GuardCallback(env, [&]() -> napi_value {
+        if (!ReadArguments(env, info, 0, nullptr)) return nullptr;
+        std::vector<char> path(4096, '\0');
+        const HResult result = HFQueryExpansiveHardwareRockchipDmaHeapPathWithSize(path.data(),
+                                                                                  static_cast<HInt32>(path.size()));
+        if (result != HSUCCEED) return ThrowSdkError(env, result, "get RGA DMA heap path");
+        napi_value output = nullptr;
+        return CheckNapi(env, napi_create_string_utf8(env, path.data(), NAPI_AUTO_LENGTH, &output),
+                         "create RGA DMA heap path")
+                 ? output
+                 : nullptr;
+    });
+}
+
+napi_value SwitchImageProcessingBackend(napi_env env, napi_callback_info info) {
+    return GuardCallback(env, [&]() -> napi_value {
+        napi_value arguments[1] = {nullptr};
+        int32_t backend = 0;
+        if (!ReadArguments(env, info, 1, arguments) ||
+            !CheckNapi(env, napi_get_value_int32(env, arguments[0], &backend), "read image processing backend")) {
+            return nullptr;
+        }
+        const HResult result = HFSwitchImageProcessingBackend(static_cast<HFImageProcessingBackend>(backend));
+        return result == HSUCCEED ? Undefined(env) : ThrowSdkError(env, result, "switch image processing backend");
+    });
+}
+
+napi_value SetImageProcessAlignedWidth(napi_env env, napi_callback_info info) {
+    return GuardCallback(env, [&]() -> napi_value {
+        napi_value arguments[1] = {nullptr};
+        int32_t width = 0;
+        if (!ReadArguments(env, info, 1, arguments) ||
+            !CheckNapi(env, napi_get_value_int32(env, arguments[0], &width), "read aligned width")) {
+            return nullptr;
+        }
+        const HResult result = HFSetImageProcessAlignedWidth(width);
+        return result == HSUCCEED ? Undefined(env) : ThrowSdkError(env, result, "set image process aligned width");
+    });
+}
+
+napi_value SetCoreMlInferenceMode(napi_env env, napi_callback_info info) {
+    return GuardCallback(env, [&]() -> napi_value {
+        napi_value arguments[1] = {nullptr};
+        int32_t mode = 0;
+        if (!ReadArguments(env, info, 1, arguments) ||
+            !CheckNapi(env, napi_get_value_int32(env, arguments[0], &mode), "read CoreML mode")) return nullptr;
+        const HResult result = HFSetAppleCoreMLInferenceMode(static_cast<HFAppleCoreMLInferenceMode>(mode));
+        return result == HSUCCEED ? Undefined(env) : ThrowSdkError(env, result, "set CoreML inference mode");
+    });
+}
+
+napi_value SetCudaDeviceId(napi_env env, napi_callback_info info) {
+    return GuardCallback(env, [&]() -> napi_value {
+        napi_value arguments[1] = {nullptr};
+        int32_t id = 0;
+        if (!ReadArguments(env, info, 1, arguments) ||
+            !CheckNapi(env, napi_get_value_int32(env, arguments[0], &id), "read CUDA device ID")) return nullptr;
+        const HResult result = HFSetCudaDeviceId(id);
+        return result == HSUCCEED ? Undefined(env) : ThrowSdkError(env, result, "set CUDA device ID");
+    });
+}
+
+napi_value GetCudaDeviceId(napi_env env, napi_callback_info info) {
+    return GuardCallback(env, [&]() -> napi_value {
+        if (!ReadArguments(env, info, 0, nullptr)) return nullptr;
+        HInt32 id = 0;
+        const HResult result = HFGetCudaDeviceId(&id);
+        if (result != HSUCCEED) return ThrowSdkError(env, result, "get CUDA device ID");
+        napi_value output = nullptr;
+        return CheckNapi(env, napi_create_int32(env, id, &output), "create CUDA device ID") ? output : nullptr;
+    });
+}
+
+napi_value PrintCudaDeviceInfo(napi_env env, napi_callback_info info) {
+    return GuardCallback(env, [&]() -> napi_value {
+        if (!ReadArguments(env, info, 0, nullptr)) return nullptr;
+        const HResult result = HFPrintCudaDeviceInfo();
+        return result == HSUCCEED ? Undefined(env) : ThrowSdkError(env, result, "print CUDA device information");
+    });
+}
+
+napi_value GetCudaDeviceCount(napi_env env, napi_callback_info info) {
+    return GuardCallback(env, [&]() -> napi_value {
+        if (!ReadArguments(env, info, 0, nullptr)) return nullptr;
+        HInt32 count = 0;
+        const HResult result = HFGetNumCudaDevices(&count);
+        if (result != HSUCCEED) return ThrowSdkError(env, result, "get CUDA device count");
+        napi_value output = nullptr;
+        return CheckNapi(env, napi_create_int32(env, count, &output), "create CUDA device count") ? output : nullptr;
+    });
+}
+
+napi_value IsCudaSupported(napi_env env, napi_callback_info info) {
+    return GuardCallback(env, [&]() -> napi_value {
+        if (!ReadArguments(env, info, 0, nullptr)) return nullptr;
+        HInt32 supported = 0;
+        const HResult result = HFCheckCudaDeviceSupport(&supported);
+        if (result != HSUCCEED) return ThrowSdkError(env, result, "check CUDA support");
+        napi_value output = nullptr;
+        return CheckNapi(env, napi_get_boolean(env, supported != 0, &output), "create CUDA support status") ? output : nullptr;
+    });
+}
+
+napi_value ConfigureTrackCost(napi_env env, napi_callback_info info) {
+    return GuardCallback(env, [&]() -> napi_value {
+        napi_value arguments[2] = {nullptr, nullptr};
+        bool enabled = false;
+        if (!ReadArguments(env, info, 2, arguments)) return nullptr;
+        SessionState* session =
+          UnwrapState<SessionState>(env, arguments[0], kSessionTypeTag, "Expected InspireFace session handle");
+        if (!session || !CheckNapi(env, napi_get_value_bool(env, arguments[1], &enabled), "read track cost option")) return nullptr;
+        std::lock_guard<std::mutex> lock(session->mutex);
+        if (!session->handle) return ThrowTypeError(env, "Session has already been released");
+        const HResult result = HFSessionSetEnableTrackCostSpend(session->handle, enabled ? 1 : 0);
+        return result == HSUCCEED ? Undefined(env) : ThrowSdkError(env, result, "configure track cost measurement");
+    });
+}
+
+napi_value PrintTrackCost(napi_env env, napi_callback_info info) {
+    return GuardCallback(env, [&]() -> napi_value {
+        napi_value arguments[1] = {nullptr};
+        if (!ReadArguments(env, info, 1, arguments)) return nullptr;
+        SessionState* session =
+          UnwrapState<SessionState>(env, arguments[0], kSessionTypeTag, "Expected InspireFace session handle");
+        if (!session) return nullptr;
+        std::lock_guard<std::mutex> lock(session->mutex);
+        if (!session->handle) return ThrowTypeError(env, "Session has already been released");
+        const HResult result = HFSessionPrintTrackCostSpend(session->handle);
+        return result == HSUCCEED ? Undefined(env) : ThrowSdkError(env, result, "print track cost");
+    });
+}
+
+napi_value GetDebugResourceCounts(napi_env env, napi_callback_info info) {
+    return GuardCallback(env, [&]() -> napi_value {
+        if (!ReadArguments(env, info, 0, nullptr)) return nullptr;
+        HInt32 sessions = 0;
+        HInt32 streams = 0;
+        HResult result = HFDeBugGetUnreleasedSessionsCount(&sessions);
+        if (result == HSUCCEED) result = HFDeBugGetUnreleasedStreamsCount(&streams);
+        if (result != HSUCCEED) return ThrowSdkError(env, result, "get debug resource counts");
+        napi_value output = nullptr;
+        if (!CheckNapi(env, napi_create_object(env, &output), "create resource counts") ||
+            !SetInt32(env, output, "sessions", sessions) || !SetInt32(env, output, "streams", streams)) return nullptr;
+        return output;
+    });
+}
+
+napi_value SaveDebugImageStream(napi_env env, napi_callback_info info) {
+    return GuardCallback(env, [&]() -> napi_value {
+        napi_value arguments[2] = {nullptr, nullptr};
+        std::string path;
+        if (!ReadArguments(env, info, 2, arguments) || !ReadString(env, arguments[1], &path)) return nullptr;
+        ImageStreamState* stream =
+          UnwrapState<ImageStreamState>(env, arguments[0], kImageStreamTypeTag, "Expected InspireFace image stream handle");
+        if (!stream) return nullptr;
+        std::lock_guard<std::mutex> lock(stream->mutex);
+        if (!stream->handle) return ThrowTypeError(env, "Image stream has already been released");
+        const HResult result = HFDeBugImageStreamDecodeSave(stream->handle, path.c_str());
+        return result == HSUCCEED ? Undefined(env) : ThrowSdkError(env, result, "save debug image stream");
+    });
+}
+
+napi_value ShowDebugImageStream(napi_env env, napi_callback_info info) {
+    return GuardCallback(env, [&]() -> napi_value {
+        napi_value arguments[1] = {nullptr};
+        if (!ReadArguments(env, info, 1, arguments)) return nullptr;
+        ImageStreamState* stream =
+          UnwrapState<ImageStreamState>(env, arguments[0], kImageStreamTypeTag, "Expected InspireFace image stream handle");
+        if (!stream) return nullptr;
+        std::lock_guard<std::mutex> lock(stream->mutex);
+        if (!stream->handle) return ThrowTypeError(env, "Image stream has already been released");
+        HFDeBugImageStreamImShow(stream->handle);
+        return Undefined(env);
+    });
+}
+
+napi_value ShowDebugResourceStatistics(napi_env env, napi_callback_info info) {
+    return GuardCallback(env, [&]() -> napi_value {
+        if (!ReadArguments(env, info, 0, nullptr)) return nullptr;
+        const HResult result = HFDeBugShowResourceStatistics();
+        return result == HSUCCEED ? Undefined(env) : ThrowSdkError(env, result, "show debug resource statistics");
+    });
+}
+
+napi_value LogPrint(napi_env env, napi_callback_info info) {
+    return GuardCallback(env, [&]() -> napi_value {
+        napi_value arguments[2] = {nullptr, nullptr};
+        int32_t level = 0;
+        std::string message;
+        if (!ReadArguments(env, info, 2, arguments) ||
+            !CheckNapi(env, napi_get_value_int32(env, arguments[0], &level), "read log level") ||
+            !ReadString(env, arguments[1], &message)) return nullptr;
+        const HResult result = HFLogPrint(static_cast<HFLogLevel>(level), "%s", message.c_str());
+        return result == HSUCCEED ? Undefined(env) : ThrowSdkError(env, result, "print SDK log");
+    });
+}
+
 napi_value Init(napi_env env, napi_value exports) {
     napi_property_descriptor properties[] = {
+      {"getErrorMessage", nullptr, GetErrorMessage, nullptr, nullptr, nullptr, napi_default, nullptr},
+      {"validateResourcePack", nullptr, ValidateResourcePack, nullptr, nullptr, nullptr, napi_default, nullptr},
       {"launch", nullptr, Launch, nullptr, nullptr, nullptr, napi_default, nullptr},
       {"reload", nullptr, Reload, nullptr, nullptr, nullptr, napi_default, nullptr},
       {"terminate", nullptr, Terminate, nullptr, nullptr, nullptr, napi_default, nullptr},
@@ -941,18 +2334,75 @@ napi_value Init(napi_env env, napi_value exports) {
       {"releaseSession", nullptr, ReleaseSession, nullptr, nullptr, nullptr, napi_default, nullptr},
       {"configureSession", nullptr, ConfigureSession, nullptr, nullptr, nullptr, napi_default, nullptr},
       {"clearTracking", nullptr, ClearTracking, nullptr, nullptr, nullptr, napi_default, nullptr},
+      {"getSessionPreviewSize", nullptr, GetSessionPreviewSize, nullptr, nullptr, nullptr, napi_default, nullptr},
+      {"getLastDetectionDebugPreviewSize", nullptr, GetLastDetectionDebugPreviewSize, nullptr, nullptr, nullptr, napi_default, nullptr},
+      {"getSupportedPixelLevels", nullptr, GetSupportedPixelLevels, nullptr, nullptr, nullptr, napi_default, nullptr},
+      {"switchLandmarkEngine", nullptr, SwitchLandmarkEngine, nullptr, nullptr, nullptr, napi_default, nullptr},
       {"createImageStream", nullptr, CreateImageStream, nullptr, nullptr, nullptr, napi_default, nullptr},
+      {"updateImageStream", nullptr, UpdateImageStream, nullptr, nullptr, nullptr, napi_default, nullptr},
       {"releaseImageStream", nullptr, ReleaseImageStream, nullptr, nullptr, nullptr, napi_default, nullptr},
+      {"createImageBitmap", nullptr, CreateImageBitmap, nullptr, nullptr, nullptr, napi_default, nullptr},
+      {"createImageBitmapFromFile", nullptr, CreateImageBitmapFromFile, nullptr, nullptr, nullptr, napi_default, nullptr},
+      {"copyImageBitmap", nullptr, CopyImageBitmap, nullptr, nullptr, nullptr, napi_default, nullptr},
+      {"releaseImageBitmap", nullptr, ReleaseImageBitmap, nullptr, nullptr, nullptr, napi_default, nullptr},
+      {"createImageStreamFromBitmap", nullptr, CreateImageStreamFromBitmap, nullptr, nullptr, nullptr, napi_default, nullptr},
+      {"createImageBitmapFromStream", nullptr, CreateImageBitmapFromStream, nullptr, nullptr, nullptr, napi_default, nullptr},
+      {"getImageBitmapData", nullptr, GetImageBitmapData, nullptr, nullptr, nullptr, napi_default, nullptr},
+      {"writeImageBitmap", nullptr, WriteImageBitmap, nullptr, nullptr, nullptr, napi_default, nullptr},
+      {"drawImageBitmapRect", nullptr, DrawImageBitmapRect, nullptr, nullptr, nullptr, napi_default, nullptr},
+      {"drawImageBitmapCircle", nullptr, DrawImageBitmapCircle, nullptr, nullptr, nullptr, napi_default, nullptr},
+      {"showImageBitmap", nullptr, ShowImageBitmap, nullptr, nullptr, nullptr, napi_default, nullptr},
       {"track", nullptr, Track, nullptr, nullptr, nullptr, napi_default, nullptr},
+      {"releaseFaceResult", nullptr, ReleaseFaceResult, nullptr, nullptr, nullptr, napi_default, nullptr},
+      {"processPipeline", nullptr, ProcessPipeline, nullptr, nullptr, nullptr, napi_default, nullptr},
+      {"detectFaceQuality", nullptr, DetectFaceQuality, nullptr, nullptr, nullptr, napi_default, nullptr},
       {"getDenseLandmarks", nullptr, GetDenseLandmarks, nullptr, nullptr, nullptr, napi_default, nullptr},
       {"getFiveKeyPoints", nullptr, GetFiveKeyPoints, nullptr, nullptr, nullptr, napi_default, nullptr},
       {"extractFeature", nullptr, ExtractFeature, nullptr, nullptr, nullptr, napi_default, nullptr},
+      {"getFaceAlignmentImage", nullptr, GetFaceAlignmentImage, nullptr, nullptr, nullptr, napi_default, nullptr},
+      {"extractFeatureFromAlignmentImage", nullptr, ExtractFeatureFromAlignmentImage, nullptr, nullptr, nullptr, napi_default, nullptr},
       {"getFeatureLength", nullptr, GetFeatureLength, nullptr, nullptr, nullptr, napi_default, nullptr},
       {"compareFeatures", nullptr, CompareFeatures, nullptr, nullptr, nullptr, napi_default, nullptr},
       {"getRecommendedThreshold", nullptr, GetRecommendedThreshold, nullptr, nullptr, nullptr, napi_default, nullptr},
       {"similarityToPercentage", nullptr, SimilarityToPercentage, nullptr, nullptr, nullptr, napi_default, nullptr},
+      {"getSimilarityConverter", nullptr, GetSimilarityConverter, nullptr, nullptr, nullptr, napi_default, nullptr},
+      {"updateSimilarityConverter", nullptr, UpdateSimilarityConverter, nullptr, nullptr, nullptr, napi_default, nullptr},
+      {"featureHubEnable", nullptr, FeatureHubEnable, nullptr, nullptr, nullptr, napi_default, nullptr},
+      {"featureHubDisable", nullptr, FeatureHubDisable, nullptr, nullptr, nullptr, napi_default, nullptr},
+      {"featureHubViewTable", nullptr, FeatureHubViewTable, nullptr, nullptr, nullptr, napi_default, nullptr},
+      {"featureHubSetThreshold", nullptr, FeatureHubSetThreshold, nullptr, nullptr, nullptr, napi_default, nullptr},
+      {"featureHubInsert", nullptr, FeatureHubInsert, nullptr, nullptr, nullptr, napi_default, nullptr},
+      {"featureHubUpdate", nullptr, FeatureHubUpdate, nullptr, nullptr, nullptr, napi_default, nullptr},
+      {"featureHubRemove", nullptr, FeatureHubRemove, nullptr, nullptr, nullptr, napi_default, nullptr},
+      {"featureHubGet", nullptr, FeatureHubGet, nullptr, nullptr, nullptr, napi_default, nullptr},
+      {"featureHubGetCount", nullptr, FeatureHubGetCount, nullptr, nullptr, nullptr, napi_default, nullptr},
+      {"featureHubGetIds", nullptr, FeatureHubGetIds, nullptr, nullptr, nullptr, napi_default, nullptr},
+      {"featureHubSearch", nullptr, FeatureHubSearch, nullptr, nullptr, nullptr, napi_default, nullptr},
+      {"featureHubSearchTopK", nullptr, FeatureHubSearchTopK, nullptr, nullptr, nullptr, napi_default, nullptr},
+      {"getComponentVersion", nullptr, GetComponentVersion, nullptr, nullptr, nullptr, napi_default, nullptr},
+      {"getComponentVersions", nullptr, GetComponentVersions, nullptr, nullptr, nullptr, napi_default, nullptr},
+      {"getDiagnosticInformation", nullptr, GetDiagnosticInformation, nullptr, nullptr, nullptr, napi_default, nullptr},
+      {"getExtendedInformation", nullptr, GetExtendedInformation, nullptr, nullptr, nullptr, napi_default, nullptr},
+      {"queryRgaEnabled", nullptr, QueryRgaEnabled, nullptr, nullptr, nullptr, napi_default, nullptr},
+      {"setRgaDmaHeapPath", nullptr, SetRgaDmaHeapPath, nullptr, nullptr, nullptr, napi_default, nullptr},
+      {"getRgaDmaHeapPath", nullptr, GetRgaDmaHeapPath, nullptr, nullptr, nullptr, napi_default, nullptr},
+      {"switchImageProcessingBackend", nullptr, SwitchImageProcessingBackend, nullptr, nullptr, nullptr, napi_default, nullptr},
+      {"setImageProcessAlignedWidth", nullptr, SetImageProcessAlignedWidth, nullptr, nullptr, nullptr, napi_default, nullptr},
+      {"setCoreMlInferenceMode", nullptr, SetCoreMlInferenceMode, nullptr, nullptr, nullptr, napi_default, nullptr},
+      {"setCudaDeviceId", nullptr, SetCudaDeviceId, nullptr, nullptr, nullptr, napi_default, nullptr},
+      {"getCudaDeviceId", nullptr, GetCudaDeviceId, nullptr, nullptr, nullptr, napi_default, nullptr},
+      {"printCudaDeviceInfo", nullptr, PrintCudaDeviceInfo, nullptr, nullptr, nullptr, napi_default, nullptr},
+      {"getCudaDeviceCount", nullptr, GetCudaDeviceCount, nullptr, nullptr, nullptr, napi_default, nullptr},
+      {"isCudaSupported", nullptr, IsCudaSupported, nullptr, nullptr, nullptr, napi_default, nullptr},
+      {"configureTrackCost", nullptr, ConfigureTrackCost, nullptr, nullptr, nullptr, napi_default, nullptr},
+      {"printTrackCost", nullptr, PrintTrackCost, nullptr, nullptr, nullptr, napi_default, nullptr},
+      {"getDebugResourceCounts", nullptr, GetDebugResourceCounts, nullptr, nullptr, nullptr, napi_default, nullptr},
+      {"saveDebugImageStream", nullptr, SaveDebugImageStream, nullptr, nullptr, nullptr, napi_default, nullptr},
+      {"showDebugImageStream", nullptr, ShowDebugImageStream, nullptr, nullptr, nullptr, napi_default, nullptr},
+      {"showDebugResourceStatistics", nullptr, ShowDebugResourceStatistics, nullptr, nullptr, nullptr, napi_default, nullptr},
       {"setLogLevel", nullptr, SetLogLevel, nullptr, nullptr, nullptr, napi_default, nullptr},
       {"disableLog", nullptr, DisableLog, nullptr, nullptr, nullptr, napi_default, nullptr},
+      {"logPrint", nullptr, LogPrint, nullptr, nullptr, nullptr, napi_default, nullptr},
     };
     if (!CheckNapi(env, napi_define_properties(env, exports, sizeof(properties) / sizeof(properties[0]), properties),
                    "define InspireFace exports")) {

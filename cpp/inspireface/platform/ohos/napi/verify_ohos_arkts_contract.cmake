@@ -1,34 +1,25 @@
-if(NOT DEFINED ISF_NAPI_SOURCE OR NOT DEFINED ISF_NAPI_DECLARATION OR NOT DEFINED ISF_ARKTS_WRAPPER)
-    message(FATAL_ERROR "Node-API source, declaration, and ArkTS wrapper paths are required")
+if(NOT DEFINED ISF_NAPI_SOURCE OR NOT DEFINED ISF_NAPI_DECLARATION OR NOT DEFINED ISF_ARKTS_WRAPPER OR
+        NOT DEFINED ISF_C_API_HEADER OR NOT DEFINED ISF_C_API_PARITY)
+    message(FATAL_ERROR "Node-API, ArkTS, and C API parity paths are required")
 endif()
 
 file(READ "${ISF_NAPI_SOURCE}" napi_source)
 file(READ "${ISF_NAPI_DECLARATION}" napi_declaration)
 file(READ "${ISF_ARKTS_WRAPPER}" arkts_wrapper)
+file(READ "${ISF_C_API_HEADER}" c_api_header)
+include("${ISF_C_API_PARITY}")
 
-set(expected_exports
-        launch
-        reload
-        terminate
-        isLaunched
-        getVersion
-        getCapiLevel
-        createSession
-        releaseSession
-        configureSession
-        clearTracking
-        createImageStream
-        releaseImageStream
-        track
-        getDenseLandmarks
-        getFiveKeyPoints
-        extractFeature
-        getFeatureLength
-        compareFeatures
-        getRecommendedThreshold
-        similarityToPercentage
-        setLogLevel
-        disableLog)
+string(REGEX MATCHALL "\\{\"[A-Za-z][A-Za-z0-9_]*\",[ \t]*nullptr" export_descriptors "${napi_source}")
+set(expected_exports)
+foreach(export_descriptor IN LISTS export_descriptors)
+    string(REGEX REPLACE "^\\{\"([A-Za-z][A-Za-z0-9_]*)\".*$" "\\1" export_name "${export_descriptor}")
+    list(APPEND expected_exports "${export_name}")
+endforeach()
+list(REMOVE_DUPLICATES expected_exports)
+list(LENGTH expected_exports export_count)
+if(export_count LESS 60)
+    message(FATAL_ERROR "HarmonyOS public API unexpectedly shrank to ${export_count} native exports")
+endif()
 
 foreach(export_name IN LISTS expected_exports)
     string(FIND "${napi_source}" "{\"${export_name}\"," native_offset)
@@ -47,4 +38,33 @@ foreach(export_name IN LISTS expected_exports)
     endif()
 endforeach()
 
-message(STATUS "Verified ${expected_exports} Node-API/ArkTS contract")
+string(REGEX MATCHALL "HYPER_CAPI_EXPORT[^\n]*HF[A-Za-z0-9_]+\\(" c_api_declarations "${c_api_header}")
+set(c_api_symbols)
+foreach(c_api_declaration IN LISTS c_api_declarations)
+    string(REGEX REPLACE ".*(HF[A-Za-z0-9_]+)\\($" "\\1" c_api_symbol "${c_api_declaration}")
+    list(APPEND c_api_symbols "${c_api_symbol}")
+endforeach()
+list(REMOVE_DUPLICATES c_api_symbols)
+list(LENGTH c_api_symbols c_api_count)
+if(c_api_count LESS 110)
+    message(FATAL_ERROR "Unable to discover the complete public C API; found only ${c_api_count} symbols")
+endif()
+
+foreach(c_api_symbol IN LISTS c_api_symbols)
+    set(mapped_export "")
+    foreach(parity_entry IN LISTS ISF_OHOS_C_API_PARITY)
+        if(parity_entry MATCHES "^${c_api_symbol}=([A-Za-z][A-Za-z0-9_]*)$")
+            set(mapped_export "${CMAKE_MATCH_1}")
+            break()
+        endif()
+    endforeach()
+    if(mapped_export STREQUAL "")
+        message(FATAL_ERROR "Public C API has no HarmonyOS equivalent: ${c_api_symbol}")
+    endif()
+    list(FIND expected_exports "${mapped_export}" mapped_export_index)
+    if(mapped_export_index EQUAL -1)
+        message(FATAL_ERROR "HarmonyOS parity target is not a native export: ${c_api_symbol} -> ${mapped_export}")
+    endif()
+endforeach()
+
+message(STATUS "Verified ${export_count} Node-API/ArkTS exports covering ${c_api_count} public C APIs")

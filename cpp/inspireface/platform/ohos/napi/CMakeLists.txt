@@ -31,6 +31,11 @@ target_link_options(InspireFaceNapi PRIVATE
 set_target_properties(InspireFaceNapi PROPERTIES
         OUTPUT_NAME inspireface_napi
         LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
+set_property(TARGET InspireFaceNapi APPEND PROPERTY LINK_DEPENDS
+        "${PROJECT_SOURCE_DIR}/harmony/inspireface/src/main/cpp/types/libinspireface_napi/index.d.ts"
+        "${PROJECT_SOURCE_DIR}/harmony/inspireface/src/main/ets/InspireFace.ets"
+        "${CMAKE_CURRENT_SOURCE_DIR}/ohos_c_api_parity.cmake"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../../c_api/inspireface.h")
 
 set(ISF_NAPI_READELF_EXECUTABLE "${CMAKE_READELF}")
 if(NOT ISF_NAPI_READELF_EXECUTABLE)
@@ -45,6 +50,8 @@ add_custom_command(TARGET InspireFaceNapi POST_BUILD
                 "-DISF_NAPI_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/inspireface_napi.cpp"
                 "-DISF_NAPI_DECLARATION=${PROJECT_SOURCE_DIR}/harmony/inspireface/src/main/cpp/types/libinspireface_napi/index.d.ts"
                 "-DISF_ARKTS_WRAPPER=${PROJECT_SOURCE_DIR}/harmony/inspireface/src/main/ets/InspireFace.ets"
+                "-DISF_C_API_HEADER=${CMAKE_CURRENT_SOURCE_DIR}/../../../c_api/inspireface.h"
+                "-DISF_C_API_PARITY=${CMAKE_CURRENT_SOURCE_DIR}/ohos_c_api_parity.cmake"
                 -P "${CMAKE_CURRENT_SOURCE_DIR}/verify_ohos_arkts_contract.cmake"
         COMMENT "Verifying HarmonyOS Node-API and ArkTS contract parity"
         VERBATIM)

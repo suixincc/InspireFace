@@ -10,7 +10,11 @@ export function detectFirstFace(resourcePath: string, rgba: Uint8Array, width: n
   const image = InspireFace.createImageStream(rgba, width, height, ImageFormat.RGBA, Rotation.DEGREE_0);
   try {
     const result = session.track(image);
-    return result.detectedNum;
+    try {
+      return result.detectedNum;
+    } finally {
+      session.releaseFaceResult(result);
+    }
   } finally {
     image.close();
     session.close();
