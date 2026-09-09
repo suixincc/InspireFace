@@ -71,6 +71,17 @@ from .inspireface import (
     version,
     view_table_in_terminal,
 )
+from .capture import (
+    FaceCaptureConfig,
+    FaceCaptureFilter,
+    FaceCaptureMetrics,
+    FaceCaptureProgress,
+    FaceCaptureRejectReason,
+    FaceCaptureResult,
+    FaceCaptureSession,
+    FaceCaptureState,
+    FaceDetectionSnapshot,
+)
 
 
 # Imported implementation modules are intentionally excluded. Direct imports

@@ -170,6 +170,7 @@ if(ISF_ENFORCE_CPP_API_TEST_COVERAGE)
             GetTopKConfidence GetTopKCustomIdsCache GetExistingIds
             IsConfigValid updateConfig updateConfigAndRecommendedThreshold getState getConfig convert
             destroyInstance getRecommendedCosineThreshold setRecommendedCosineThreshold
+            Configure Update Finish GetResults GetStatus
             _now Start Stop Reset Get Average Total Count Min Max name Report Disable)
 
     set(ISF_CPP_API_TEST_SOURCE "")
@@ -236,12 +237,17 @@ if(BUILD_TESTING)
             COMMAND TestCPPLifecycle ${ISF_TEST_RESOURCE_ARGS})
     add_test(NAME InspireFace.CPPAPI.Performance
             COMMAND TestCPP ${ISF_TEST_RESOURCE_ARGS} "[performance]")
+    add_test(NAME InspireFace.JNI.FaceCaptureContract
+            COMMAND "${CMAKE_COMMAND}"
+                    "-DISF_SOURCE_ROOT=${CMAKE_SOURCE_DIR}"
+                    -P "${SRC_DIR}/inspireface/platform/jni/android/verify_face_capture_jni.cmake")
 
     set_tests_properties(
             InspireFace.CAPI.Contract
             InspireFace.CAPI.Lifecycle
             InspireFace.CPPAPI.Contract
             InspireFace.CPPAPI.Lifecycle
+            InspireFace.JNI.FaceCaptureContract
             PROPERTIES
             WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/test"
             LABELS "unit;contract")

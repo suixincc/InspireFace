@@ -3,6 +3,7 @@
 import inspect
 import unittest
 
+from inspireface.modules import capture as capture_module
 from inspireface.modules import inspireface as api_module
 
 from .settings import TEST_RES_DIR
@@ -10,6 +11,15 @@ from .settings import TEST_RES_DIR
 
 COVERED_PUBLIC_API = {
     "FaceExtended",
+    "FaceCaptureConfig",
+    "FaceCaptureFilter",
+    "FaceCaptureMetrics",
+    "FaceCaptureProgress",
+    "FaceCaptureRejectReason",
+    "FaceCaptureResult",
+    "FaceCaptureSession",
+    "FaceCaptureState",
+    "FaceDetectionSnapshot",
     "FaceIdentity",
     "FaceInformation",
     "FeatureHubConfiguration",
@@ -72,13 +82,15 @@ EXCLUDED_PUBLIC_API = {
 
 class PublicApiCoverageCase(unittest.TestCase):
     def test_public_api_manifest_is_current(self):
-        discovered = {
-            name
-            for name, value in vars(api_module).items()
-            if not name.startswith("_")
-            and (inspect.isfunction(value) or inspect.isclass(value))
-            and getattr(value, "__module__", None) == api_module.__name__
-        }
+        discovered = set()
+        for module in (api_module, capture_module):
+            discovered.update(
+                name
+                for name, value in vars(module).items()
+                if not name.startswith("_")
+                and (inspect.isfunction(value) or inspect.isclass(value))
+                and getattr(value, "__module__", None) == module.__name__
+            )
         accounted_for = COVERED_PUBLIC_API | EXCLUDED_PUBLIC_API
         self.assertEqual(
             discovered - accounted_for,

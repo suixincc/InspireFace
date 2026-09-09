@@ -51,3 +51,7 @@ HERR_EXTENSION_HETERO_MODEL_TAG_ERROR = 353  # Incorrect heterogeneous model tag
 HERR_EXTENSION_HETERO_REC_HEAD_CONFIG_ERROR = 354  # Rec head config error (354)
 HERR_EXTENSION_HETERO_MODEL_NOT_MATCH = 355  # Heterogeneous model dimensions do not match (355)
 HERR_EXTENSION_HETERO_MODEL_NOT_LOADED = 356  # Heterogeneous model dimensions not loaded (356)
+HERR_CAPTURE_INVALID_CONFIG = 401  # Invalid capture configuration (401)
+HERR_CAPTURE_REQUIRED_FEATURE_OFF = 402  # Required session feature is disabled (402)
+HERR_CAPTURE_FRAME_OUT_OF_ORDER = 403  # Frame ID or timestamp is not increasing (403)
+HERR_CAPTURE_INVALID_HANDLE = 404  # Invalid capture session handle (404)

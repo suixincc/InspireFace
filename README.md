@@ -1,13 +1,12 @@
 # InspireFace
-[![GitHub release](https://img.shields.io/github/v/release/HyperInspire/InspireFace.svg?style=for-the-badge&color=blue&label=Github+release&logo=github)](https://github.com/HyperInspire/InspireFace/releases/latest)
-[![Model](https://img.shields.io/github/v/release/HyperInspire/InspireFace.svg?style=for-the-badge&color=blue&label=Model+Zoo&logo=github)](https://github.com/HyperInspire/InspireFace/releases/tag/v1.x)
-[![pypi](https://img.shields.io/pypi/v/inspireface.svg?style=for-the-badge&color=orange&label=PYPI+release&logo=python)](https://pypi.org/project/inspireface/)
-[![JitPack](https://img.shields.io/jitpack/v/github/HyperInspire/inspireface-android-sdk?style=for-the-badge&color=green&label=JitPack&logo=android)](https://jitpack.io/#HyperInspire/inspireface-android-sdk)
-[![build](https://img.shields.io/github/actions/workflow/status/HyperInspire/InspireFace/release-sdks.yaml?&style=for-the-badge&label=building&logo=cmake)](https://github.com/HyperInspire/InspireFace/actions/workflows/release-sdks.yaml)
-[![test](https://img.shields.io/github/actions/workflow/status/HyperInspire/InspireFace/release-sdks.yaml?&style=for-the-badge&label=testing&logo=c)](https://github.com/HyperInspire/InspireFace/actions/workflows/test_ubuntu_x86_Pikachu.yaml)
-[![Document](https://img.shields.io/badge/Document-Building-blue?style=for-the-badge&logo=readthedocs)](https://doc.inspireface.online/)
 
-
+[![GitHub release](https://img.shields.io/github/v/release/HyperInspire/InspireFace.svg?style=flat&color=blue&label=GitHub+release&logo=github)](https://github.com/HyperInspire/InspireFace/releases/latest)
+[![Model](https://img.shields.io/github/v/release/HyperInspire/InspireFace.svg?style=flat&color=blue&label=Model+Zoo&logo=github)](https://github.com/HyperInspire/InspireFace/releases/tag/v1.x)
+[![PyPI](https://img.shields.io/pypi/v/inspireface.svg?style=flat&color=orange&label=PyPI+release&logo=python)](https://pypi.org/project/inspireface/)
+[![JitPack](https://jitpack.io/v/HyperInspire/inspireface-android-sdk.svg)](https://jitpack.io/#HyperInspire/inspireface-android-sdk)
+[![Release SDKs](https://github.com/HyperInspire/InspireFace/actions/workflows/release-sdks.yaml/badge.svg)](https://github.com/HyperInspire/InspireFace/actions/workflows/release-sdks.yaml)
+[![Ubuntu x86 Tests](https://github.com/HyperInspire/InspireFace/actions/workflows/test_ubuntu_x86_Pikachu.yaml/badge.svg)](https://github.com/HyperInspire/InspireFace/actions/workflows/test_ubuntu_x86_Pikachu.yaml)
+[![Documentation](https://img.shields.io/badge/Document-Building-blue?style=flat&logo=readthedocs)](https://doc.inspireface.online/)
 
 InspireFace is a cross-platform face recognition SDK developed in C/C++, supporting multiple operating systems and various backend types for inference, such as CPU, GPU, and NPU.
 
@@ -23,6 +22,8 @@ Please contact [contact@insightface.ai](mailto:contact@insightface.ai?subject=In
 We welcome your questions💬, they help guide and accelerate its development.
 
 ## Change Logs
+
+**`2026-08-30`** Add HarmonyOS support and configurable best-frame face capture, improve SDK performance, reliability, API compatibility, and Python usability, and expand regression tests, benchmarks, and bilingual documentation.
 
 **`2026-07-22`** Add an Android example app.
 

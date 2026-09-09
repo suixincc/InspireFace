@@ -38,6 +38,7 @@ struct ResourceStatistics {
     ResourceCounts image_bitmaps;
     ResourceCounts face_features;
     ResourceCounts face_result_snapshots;
+    ResourceCounts face_capture_sessions;
 };
 
 /**
@@ -153,6 +154,21 @@ public:
         return released;
     }
 
+    bool createFaceCaptureSession(ResourceHandle handle, std::shared_ptr<void> owner = {}) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return Register(face_capture_session_registry_, handle, std::move(owner));
+    }
+
+    bool releaseFaceCaptureSession(ResourceHandle handle) {
+        std::shared_ptr<void> released_owner;
+        bool released = false;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            released = Release(face_capture_session_registry_, handle, released_owner);
+        }
+        return released;
+    }
+
     ResourceLease acquireSession(ResourceHandle handle) const {
         std::lock_guard<std::mutex> lock(mutex_);
         return Acquire(session_registry_, handle);
@@ -171,6 +187,11 @@ public:
     ResourceLease acquireFaceResultSnapshot(ResourceHandle handle) const {
         std::lock_guard<std::mutex> lock(mutex_);
         return Acquire(face_result_snapshot_registry_, handle);
+    }
+
+    ResourceLease acquireFaceCaptureSession(ResourceHandle handle) const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return Acquire(face_capture_session_registry_, handle);
     }
 
     bool isSessionLive(ResourceHandle handle) const {
@@ -196,6 +217,11 @@ public:
     bool isFaceResultSnapshotLive(ResourceHandle handle) const {
         std::lock_guard<std::mutex> lock(mutex_);
         return Contains(face_result_snapshot_registry_, handle);
+    }
+
+    bool isFaceCaptureSessionLive(ResourceHandle handle) const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return Contains(face_capture_session_registry_, handle);
     }
 
     std::vector<ResourceHandle> getUnreleasedSessions() const {
@@ -231,6 +257,7 @@ public:
         statistics.image_bitmaps = Counts(image_bitmap_registry_);
         statistics.face_features = Counts(face_feature_registry_);
         statistics.face_result_snapshots = Counts(face_result_snapshot_registry_);
+        statistics.face_capture_sessions = Counts(face_capture_session_registry_);
         return statistics;
     }
 
@@ -244,6 +271,7 @@ public:
         PrintCounts("Bitmap", statistics.image_bitmaps);
         PrintCounts("FaceFeature", statistics.face_features);
         PrintCounts("FaceSnapshot", statistics.face_result_snapshots);
+        PrintCounts("FaceCapture", statistics.face_capture_sessions);
         INSPIRE_LOGI("================================================================");
     }
 
@@ -322,6 +350,7 @@ private:
     Registry image_bitmap_registry_;
     Registry face_feature_registry_;
     Registry face_result_snapshot_registry_;
+    Registry face_capture_session_registry_;
 };
 
 }  // namespace inspire

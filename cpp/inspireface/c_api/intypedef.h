@@ -16,6 +16,8 @@ typedef void*               HFImageBitmap;                    ///< Handle for im
 typedef void**              PHFImageBitmap;                   ///< Pointer to Handle for image bitmap.
 typedef void*               HFFaceResultSnapshot;             ///< Handle for an owned face detection result snapshot.
 typedef void**              PHFFaceResultSnapshot;            ///< Pointer to an owned face detection result snapshot handle.
+typedef void*               HFFaceCaptureSession;             ///< Handle for a stateful face capture session.
+typedef void**              PHFFaceCaptureSession;            ///< Pointer to a face capture session handle.
 typedef void*               HPVoid;                           ///< Pointer to Void.
 typedef long                HLong;                            ///< Long integer.
 typedef float               HFloat;                           ///< Single-precision floating point.

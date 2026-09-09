@@ -45,6 +45,36 @@ extern "C" {
 /** Initial version of HFSessionConfigV2. */
 #define HF_SESSION_CONFIG_V2_VERSION 1U
 
+/** Initial version of HFFaceCaptureConfig. */
+#define HF_FACE_CAPTURE_CONFIG_VERSION 1U
+#define HF_FACE_CAPTURE_MAX_RESULTS 8U
+
+#define HF_CAPTURE_FILTER_NONE UINT64_C(0)
+#define HF_CAPTURE_FILTER_FACE_COUNT (UINT64_C(1) << 0)
+#define HF_CAPTURE_FILTER_FACE_SIZE (UINT64_C(1) << 1)
+#define HF_CAPTURE_FILTER_FACE_POSITION (UINT64_C(1) << 2)
+#define HF_CAPTURE_FILTER_FACE_BOUNDARY (UINT64_C(1) << 3)
+#define HF_CAPTURE_FILTER_STABILITY (UINT64_C(1) << 4)
+#define HF_CAPTURE_FILTER_POSE (UINT64_C(1) << 5)
+#define HF_CAPTURE_FILTER_QUALITY (UINT64_C(1) << 6)
+#define HF_CAPTURE_FILTER_SHARPNESS (UINT64_C(1) << 7)
+#define HF_CAPTURE_FILTER_BRIGHTNESS (UINT64_C(1) << 8)
+#define HF_CAPTURE_FILTER_TRACK_COUNT (UINT64_C(1) << 9)
+
+#define HF_CAPTURE_REJECT_NONE UINT64_C(0)
+#define HF_CAPTURE_REJECT_NO_FACE (UINT64_C(1) << 0)
+#define HF_CAPTURE_REJECT_MULTIPLE_FACES (UINT64_C(1) << 1)
+#define HF_CAPTURE_REJECT_FACE_TOO_SMALL (UINT64_C(1) << 2)
+#define HF_CAPTURE_REJECT_FACE_TOO_LARGE (UINT64_C(1) << 3)
+#define HF_CAPTURE_REJECT_FACE_OFF_CENTER (UINT64_C(1) << 4)
+#define HF_CAPTURE_REJECT_FACE_OUT_OF_BOUNDS (UINT64_C(1) << 5)
+#define HF_CAPTURE_REJECT_UNSTABLE (UINT64_C(1) << 6)
+#define HF_CAPTURE_REJECT_POSE (UINT64_C(1) << 7)
+#define HF_CAPTURE_REJECT_QUALITY (UINT64_C(1) << 8)
+#define HF_CAPTURE_REJECT_SHARPNESS (UINT64_C(1) << 9)
+#define HF_CAPTURE_REJECT_BRIGHTNESS (UINT64_C(1) << 10)
+#define HF_CAPTURE_REJECT_TRACK_COUNT_TOO_LOW (UINT64_C(1) << 11)
+
 /** Initial version of HFResourcePackInfo. */
 #define HF_RESOURCE_PACK_INFO_VERSION 1U
 
@@ -718,6 +748,88 @@ typedef struct HFMultipleFaceData {
     PHFFaceBasicToken tokens;  ///< Tokens associated with each face.
 } HFMultipleFaceData, *PHFMultipleFaceData;
 
+typedef enum HFFaceCaptureState {
+    HF_CAPTURE_STATE_IDLE = 0,
+    HF_CAPTURE_STATE_STABILIZING = 1,
+    HF_CAPTURE_STATE_COLLECTING = 2,
+    HF_CAPTURE_STATE_READY = 3,
+    HF_CAPTURE_STATE_FINISHED = 4,
+    HF_CAPTURE_STATE_TRACK_LOST = 5,
+} HFFaceCaptureState;
+
+/** Fixed-layout configuration for the stateful face capture policy. */
+typedef struct HFFaceCaptureConfig {
+    HFUInt32 structSize;
+    HFUInt32 structVersion;
+    HFUInt64 filterMask;
+    HFUInt32 outputCount;
+    HFUInt32 minTrackCount;  ///< Minimum consecutive tracker count when TRACK_COUNT is enabled.
+    HFUInt64 stableDurationMs;
+    HFUInt64 collectDurationMs;
+    HFUInt64 maxCollectDurationMs;
+    HFUInt64 trackLostGraceMs;
+    HFUInt64 minCandidateIntervalMs;
+    HFloat minFaceWidthRatio;
+    HFloat maxFaceWidthRatio;
+    HFloat maxCenterOffsetX;
+    HFloat maxCenterOffsetY;
+    HFloat boundaryMarginRatio;
+    HFloat maxCenterMotionRatio;
+    HFloat maxSizeChangeRatio;
+    HFloat maxAbsYaw;
+    HFloat maxAbsPitch;
+    HFloat maxAbsRoll;
+    HFloat minQualityScore;
+    HFloat minSharpnessScore;
+    HFloat minBrightnessScore;
+    HFloat maxBrightnessScore;
+    HFUInt32 reserved[8];
+} HFFaceCaptureConfig, *PHFFaceCaptureConfig;
+
+typedef struct HFFaceCaptureMetrics {
+    HFUInt64 availableMetrics;
+    HFloat faceWidthRatio;
+    HFloat centerOffsetX;
+    HFloat centerOffsetY;
+    HFloat stabilityScore;
+    HFloat poseScore;
+    HFloat qualityScore;
+    HFloat sharpnessScore;
+    HFloat brightnessScore;
+} HFFaceCaptureMetrics, *PHFFaceCaptureMetrics;
+
+typedef struct HFFaceCaptureProgress {
+    HInt32 state;
+    HFUInt32 candidateCount;
+    HFUInt64 frameId;
+    HFUInt64 timestampMs;
+    HInt32 trackId;
+    HInt32 trackCount;       ///< Current selected face tracker count, or 0 when no face is selected.
+    HFUInt64 evaluatedFilters;
+    HFUInt64 rejectReasons;
+    HFloat progress;
+    HFloat currentScore;
+    HFFaceCaptureMetrics metrics;
+} HFFaceCaptureProgress, *PHFFaceCaptureProgress;
+
+/**
+ * A result is a borrowed view. token.data remains valid until the next update,
+ * reset, finish, or release operation on the capture session.
+ */
+typedef struct HFFaceCaptureResult {
+    HFUInt64 frameId;
+    HFUInt64 timestampMs;
+    HInt32 trackId;
+    HInt32 trackCount;
+    HFloat score;
+    HFaceRect rect;
+    HFloat roll;
+    HFloat yaw;
+    HFloat pitch;
+    HFFaceBasicToken token;
+    HFFaceCaptureMetrics metrics;
+} HFFaceCaptureResult, *PHFFaceCaptureResult;
+
 /**
  * @brief Clear the tracking face
  * @param session Handle to the session.
@@ -846,6 +958,60 @@ HYPER_CAPI_EXPORT extern HResult HFGetFaceResultSnapshotData(HFFaceResultSnapsho
  * @brief Release an owned face result snapshot.
  */
 HYPER_CAPI_EXPORT extern HResult HFReleaseFaceResultSnapshot(HFFaceResultSnapshot snapshot);
+
+/************************************************************************
+ * Face Capture Module
+ *
+ * A capture session is synchronous and pins the HFSession supplied at creation.
+ * It does not create worker threads or own a camera. Calls on one capture handle
+ * are serialized; different capture handles may run concurrently.
+ ************************************************************************/
+
+/** Fill a capture configuration with stable defaults. */
+HYPER_CAPI_EXPORT extern HResult HFGetDefaultFaceCaptureConfig(PHFFaceCaptureConfig config);
+
+/**
+ * Create a capture session attached to an existing face session. Selected pose
+ * and quality filters require the corresponding feature on the existing session.
+ */
+HYPER_CAPI_EXPORT extern HResult HFCreateFaceCaptureSession(HFSession session, const HFFaceCaptureConfig* config,
+                                                            PHFFaceCaptureSession captureSession);
+
+/** Run face tracking, assess the frame, and update the bounded Top-N result set. */
+HYPER_CAPI_EXPORT extern HResult HFUpdateFaceCaptureSession(HFFaceCaptureSession captureSession, HFImageStream stream,
+                                                            HFUInt64 frameId, HFUInt64 timestampMs,
+                                                            PHFFaceCaptureProgress progress);
+
+/**
+ * Assess the current frame's owned detection snapshot without running face
+ * tracking again. The stream is still required by optional sharpness and
+ * brightness filters. A snapshot freezes trackCount; do not reuse one snapshot
+ * as multiple video frames when the TRACK_COUNT filter is enabled.
+ */
+HYPER_CAPI_EXPORT extern HResult HFUpdateFaceCaptureSessionWithSnapshot(HFFaceCaptureSession captureSession,
+                                                                        HFImageStream stream,
+                                                                        HFFaceResultSnapshot snapshot,
+                                                                        HFUInt64 frameId,
+                                                                        HFUInt64 timestampMs,
+                                                                        PHFFaceCaptureProgress progress);
+
+/**
+ * Copy the current ordered result views. Pass results=NULL and capacity=0 to
+ * query the required count. capacity must be at least the returned count.
+ */
+HYPER_CAPI_EXPORT extern HResult HFGetFaceCaptureResults(HFFaceCaptureSession captureSession,
+                                                         PHFFaceCaptureResult results, HFUInt32 capacity,
+                                                         HFUInt32* resultCount);
+
+/** Stop accepting frames while preserving the current result set. */
+HYPER_CAPI_EXPORT extern HResult HFFinishFaceCaptureSession(HFFaceCaptureSession captureSession,
+                                                            PHFFaceCaptureProgress progress);
+
+/** Reset temporal state and results while preserving the configuration. */
+HYPER_CAPI_EXPORT extern HResult HFResetFaceCaptureSession(HFFaceCaptureSession captureSession);
+
+/** Release a capture session. Releasing it twice returns HERR_CAPTURE_INVALID_HANDLE. */
+HYPER_CAPI_EXPORT extern HResult HFReleaseFaceCaptureSession(HFFaceCaptureSession captureSession);
 
 /**
  * @brief Gets the size of the debug preview image for the last face detection in the session.

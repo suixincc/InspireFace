@@ -74,6 +74,13 @@
 #define HERR_EXTENSION_HETERO_MODEL_NOT_MATCH (HERR_EXTENSION_BASE + 5)        // Heterogeneous model dimensions do not match (355)
 #define HERR_EXTENSION_HETERO_MODEL_NOT_LOADED (HERR_EXTENSION_BASE + 6)       // Heterogeneous model dimensions not loaded (356)
 
+// Face capture error types (400-449)
+#define HERR_CAPTURE_BASE 0x0190                                      // Face capture errors (400)
+#define HERR_CAPTURE_INVALID_CONFIG (HERR_CAPTURE_BASE + 1)           // Invalid capture configuration (401)
+#define HERR_CAPTURE_REQUIRED_FEATURE_OFF (HERR_CAPTURE_BASE + 2)     // Required session feature is disabled (402)
+#define HERR_CAPTURE_FRAME_OUT_OF_ORDER (HERR_CAPTURE_BASE + 3)       // Frame ID or timestamp is not increasing (403)
+#define HERR_CAPTURE_INVALID_HANDLE (HERR_CAPTURE_BASE + 4)           // Invalid capture session handle (404)
+
 // [Anchor-End]
 
 #endif  // INSPIRE_FACE_HERROR_H

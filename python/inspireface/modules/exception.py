@@ -81,6 +81,8 @@ ERROR_CODE_MAPPING = {
         errcode.HERR_INVALID_IMAGE_STREAM_PARAM,
         errcode.HERR_INVALID_BUFFER_SIZE,
         errcode.HERR_INVALID_DETECTION_INPUT,
+        errcode.HERR_CAPTURE_INVALID_CONFIG,
+        errcode.HERR_CAPTURE_FRAME_OUT_OF_ORDER,
     ],
     
     # System not ready
@@ -98,6 +100,7 @@ ERROR_CODE_MAPPING = {
         errcode.HERR_SESS_REC_EXTRACT_FAILURE,
         errcode.HERR_SESS_LANDMARK_NOT_ENABLE,
         errcode.HERR_IMAGE_STREAM_DECODE_FAILED,
+        errcode.HERR_CAPTURE_REQUIRED_FEATURE_OFF,
     ],
     
     # Resource errors
@@ -108,6 +111,7 @@ ERROR_CODE_MAPPING = {
         errcode.HERR_INVALID_FACE_FEATURE,
         errcode.HERR_INVALID_FACE_LIST,
         errcode.HERR_INVALID_IMAGE_BITMAP_HANDLE,
+        errcode.HERR_CAPTURE_INVALID_HANDLE,
     ],
     
     # Hardware errors

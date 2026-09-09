@@ -62,6 +62,8 @@ private:
 using UniqueSession = UniqueHandle<HFSession, HFReleaseInspireFaceSession>;
 using UniqueImageStream = UniqueHandle<HFImageStream, HFReleaseImageStream>;
 using UniqueImageBitmap = UniqueHandle<HFImageBitmap, HFReleaseImageBitmap>;
+using UniqueFaceResultSnapshot = UniqueHandle<HFFaceResultSnapshot, HFReleaseFaceResultSnapshot>;
+using UniqueFaceCaptureSession = UniqueHandle<HFFaceCaptureSession, HFReleaseFaceCaptureSession>;
 
 class UniqueFaceFeature {
 public:

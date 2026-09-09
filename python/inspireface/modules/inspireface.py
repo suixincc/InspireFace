@@ -734,6 +734,20 @@ class InspireFaceSession:
 
                 return infos
             return []
+
+    def face_detection_snapshot(self, image):
+        """Run detection once and return an independently owned result snapshot."""
+        validate_session_initialized(self, "Face detection snapshot")
+        from .capture import FaceDetectionSnapshot
+
+        return FaceDetectionSnapshot(self, image)
+
+    def create_face_capture(self, config=None):
+        """Create a synchronous face-capture policy attached to this session."""
+        validate_session_initialized(self, "Create face capture session")
+        from .capture import FaceCaptureSession
+
+        return FaceCaptureSession(self, config)
         
     def get_face_five_key_points(self, single_face: FaceInformation) -> np.ndarray:
         """Get five key points for a detected face"""

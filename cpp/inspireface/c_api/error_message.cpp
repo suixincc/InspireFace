@@ -59,6 +59,11 @@ const char* ResolveErrorMessage(HResult error_code) {
         case HERR_EXTENSION_HETERO_MODEL_NOT_MATCH: return "Extension heterogeneous model does not match";
         case HERR_EXTENSION_HETERO_MODEL_NOT_LOADED: return "Extension heterogeneous model is not loaded";
 
+        case HERR_CAPTURE_INVALID_CONFIG: return "Face capture configuration is invalid";
+        case HERR_CAPTURE_REQUIRED_FEATURE_OFF: return "A face capture filter requires a disabled session feature";
+        case HERR_CAPTURE_FRAME_OUT_OF_ORDER: return "Face capture frame ID or timestamp is out of order";
+        case HERR_CAPTURE_INVALID_HANDLE: return "Invalid face capture session handle";
+
         default: return "Unknown error code";
     }
 }

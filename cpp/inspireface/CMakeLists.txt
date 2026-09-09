@@ -302,6 +302,14 @@ install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/include/inspireface/herror.h DESTINATI
 
 install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/version.txt DESTINATION ${CMAKE_INSTALL_PREFIX}/)
 
+if(ANDROID)
+    # Ship the Java declarations with the JNI-enabled Android library so the
+    # native and managed interfaces cannot be released independently.
+    install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/platform/jni/java/
+            DESTINATION ${CMAKE_INSTALL_PREFIX}/InspireFace/java
+            FILES_MATCHING PATTERN "*.java")
+endif()
+
 if(ISF_INSTALL_CPP_HEADER)
     # Install cpp api header file
     install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/inspireface/ DESTINATION ${CMAKE_INSTALL_PREFIX}/InspireFace/include/inspireface/)

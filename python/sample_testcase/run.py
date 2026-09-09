@@ -19,6 +19,7 @@ TEST_MODULES = (
     "sample_testcase.test_system_and_stream",
     "sample_testcase.test_image_process",
     "sample_testcase.test_face_track",
+    "sample_testcase.test_face_capture",
     "sample_testcase.test_pipeline",
     "sample_testcase.test_recognition_and_hub",
     "sample_testcase.test_similarity_and_errors",

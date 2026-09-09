@@ -11,7 +11,7 @@
 
 namespace {
 
-constexpr std::array<HResult, 47> kPublishedResultCodes = {{
+constexpr std::array<HResult, 51> kPublishedResultCodes = {{
   HSUCCEED,
   HERR_UNKNOWN,
   HERR_INVALID_PARAM,
@@ -59,6 +59,10 @@ constexpr std::array<HResult, 47> kPublishedResultCodes = {{
   HERR_EXTENSION_HETERO_REC_HEAD_CONFIG_ERROR,
   HERR_EXTENSION_HETERO_MODEL_NOT_MATCH,
   HERR_EXTENSION_HETERO_MODEL_NOT_LOADED,
+  HERR_CAPTURE_INVALID_CONFIG,
+  HERR_CAPTURE_REQUIRED_FEATURE_OFF,
+  HERR_CAPTURE_FRAME_OUT_OF_ORDER,
+  HERR_CAPTURE_INVALID_HANDLE,
 }};
 
 std::string GetErrorMessage(HResult code) {

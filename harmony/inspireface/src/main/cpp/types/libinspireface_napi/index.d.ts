@@ -14,6 +14,10 @@ export interface NativeImageBitmapHandle {
   readonly __inspireFaceImageBitmapBrand: string;
 }
 
+export interface NativeFaceCaptureHandle {
+  readonly __inspireFaceCaptureBrand: string;
+}
+
 export interface NativeVersion {
   major: number;
   minor: number;
@@ -62,6 +66,71 @@ export interface NativeTrackResult {
   detectedNum: number;
   faces: NativeTrackedFace[];
   handle: NativeFaceResultHandle;
+}
+
+export interface NativeFaceCaptureConfig {
+  filterMask?: number;
+  outputCount?: number;
+  minTrackCount?: number;
+  stableDurationMs?: number;
+  collectDurationMs?: number;
+  maxCollectDurationMs?: number;
+  trackLostGraceMs?: number;
+  minCandidateIntervalMs?: number;
+  minFaceWidthRatio?: number;
+  maxFaceWidthRatio?: number;
+  maxCenterOffsetX?: number;
+  maxCenterOffsetY?: number;
+  boundaryMarginRatio?: number;
+  maxCenterMotionRatio?: number;
+  maxSizeChangeRatio?: number;
+  maxAbsYaw?: number;
+  maxAbsPitch?: number;
+  maxAbsRoll?: number;
+  minQualityScore?: number;
+  minSharpnessScore?: number;
+  minBrightnessScore?: number;
+  maxBrightnessScore?: number;
+}
+
+export interface NativeFaceCaptureMetrics {
+  availableMetrics: number;
+  faceWidthRatio: number;
+  centerOffsetX: number;
+  centerOffsetY: number;
+  stabilityScore: number;
+  poseScore: number;
+  qualityScore: number;
+  sharpnessScore: number;
+  brightnessScore: number;
+}
+
+export interface NativeFaceCaptureProgress {
+  state: number;
+  candidateCount: number;
+  frameId: number;
+  timestampMs: number;
+  trackId: number;
+  trackCount: number;
+  evaluatedFilters: number;
+  rejectReasons: number;
+  progress: number;
+  currentScore: number;
+  metrics: NativeFaceCaptureMetrics;
+}
+
+export interface NativeFaceCaptureResult {
+  frameId: number;
+  timestampMs: number;
+  trackId: number;
+  trackCount: number;
+  score: number;
+  rect: NativeRect;
+  roll: number;
+  yaw: number;
+  pitch: number;
+  token: Uint8Array;
+  metrics: NativeFaceCaptureMetrics;
 }
 
 export interface NativeResourcePackInfo {
@@ -185,6 +254,14 @@ interface InspireFaceNativeModule {
   showImageBitmap(handle: NativeImageBitmapHandle, title: string, delay: number): void;
   track(session: NativeSessionHandle, image: NativeImageStreamHandle): NativeTrackResult;
   releaseFaceResult(handle: NativeFaceResultHandle): void;
+  getDefaultFaceCaptureConfig(): NativeFaceCaptureConfig;
+  createFaceCaptureSession(session: NativeSessionHandle, config: NativeFaceCaptureConfig): NativeFaceCaptureHandle;
+  updateFaceCaptureSession(capture: NativeFaceCaptureHandle, image: NativeImageStreamHandle,
+    faces: NativeFaceResultHandle | null, frameId: number, timestampMs: number): NativeFaceCaptureProgress;
+  getFaceCaptureResults(capture: NativeFaceCaptureHandle): NativeFaceCaptureResult[];
+  finishFaceCaptureSession(capture: NativeFaceCaptureHandle): NativeFaceCaptureProgress;
+  resetFaceCaptureSession(capture: NativeFaceCaptureHandle): void;
+  releaseFaceCaptureSession(capture: NativeFaceCaptureHandle): void;
   processPipeline(session: NativeSessionHandle, image: NativeImageStreamHandle,
     faces: NativeFaceResultHandle, featureMask: number): NativePipelineResult;
   detectFaceQuality(session: NativeSessionHandle, token: Uint8Array): number;

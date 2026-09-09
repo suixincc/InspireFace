@@ -145,6 +145,128 @@ inspire::ResourceManager::ResourceLease AcquireFaceResultSnapshot(HFFaceResultSn
     return RESOURCE_MANAGE->acquireFaceResultSnapshot(reinterpret_cast<inspire::ResourceHandle>(handle));
 }
 
+inspire::ResourceManager::ResourceLease AcquireFaceCaptureSession(HFFaceCaptureSession handle) {
+    return RESOURCE_MANAGE->acquireFaceCaptureSession(reinterpret_cast<inspire::ResourceHandle>(handle));
+}
+
+HFFaceCaptureMetrics ToCaptureMetrics(const inspire::FaceCaptureMetrics& source) {
+    HFFaceCaptureMetrics target{};
+    target.availableMetrics = source.availableMetrics;
+    target.faceWidthRatio = source.faceWidthRatio;
+    target.centerOffsetX = source.centerOffsetX;
+    target.centerOffsetY = source.centerOffsetY;
+    target.stabilityScore = source.stabilityScore;
+    target.poseScore = source.poseScore;
+    target.qualityScore = source.qualityScore;
+    target.sharpnessScore = source.sharpnessScore;
+    target.brightnessScore = source.brightnessScore;
+    return target;
+}
+
+void ToCaptureProgress(const inspire::FaceCaptureUpdate& source, PHFFaceCaptureProgress target) {
+    *target = HFFaceCaptureProgress{};
+    target->state = static_cast<HInt32>(source.state);
+    target->candidateCount = source.candidateCount;
+    target->frameId = source.frameId;
+    target->timestampMs = source.timestampMs;
+    target->trackId = source.trackId;
+    target->trackCount = source.trackCount;
+    target->evaluatedFilters = source.evaluatedFilters;
+    target->rejectReasons = source.rejectReasons;
+    target->progress = source.progress;
+    target->currentScore = source.currentScore;
+    target->metrics = ToCaptureMetrics(source.metrics);
+}
+
+inspire::FaceCaptureConfig DefaultCaptureConfig() {
+    return inspire::FaceCaptureConfig{};
+}
+
+void ToCCaptureConfig(const inspire::FaceCaptureConfig& source, PHFFaceCaptureConfig target) {
+    *target = HFFaceCaptureConfig{};
+    target->structSize = sizeof(HFFaceCaptureConfig);
+    target->structVersion = HF_FACE_CAPTURE_CONFIG_VERSION;
+    target->filterMask = source.filterMask;
+    target->outputCount = source.outputCount;
+    target->minTrackCount = source.minTrackCount;
+    target->stableDurationMs = source.stableDurationMs;
+    target->collectDurationMs = source.collectDurationMs;
+    target->maxCollectDurationMs = source.maxCollectDurationMs;
+    target->trackLostGraceMs = source.trackLostGraceMs;
+    target->minCandidateIntervalMs = source.minCandidateIntervalMs;
+    target->minFaceWidthRatio = source.minFaceWidthRatio;
+    target->maxFaceWidthRatio = source.maxFaceWidthRatio;
+    target->maxCenterOffsetX = source.maxCenterOffsetX;
+    target->maxCenterOffsetY = source.maxCenterOffsetY;
+    target->boundaryMarginRatio = source.boundaryMarginRatio;
+    target->maxCenterMotionRatio = source.maxCenterMotionRatio;
+    target->maxSizeChangeRatio = source.maxSizeChangeRatio;
+    target->maxAbsYaw = source.maxAbsYaw;
+    target->maxAbsPitch = source.maxAbsPitch;
+    target->maxAbsRoll = source.maxAbsRoll;
+    target->minQualityScore = source.minQualityScore;
+    target->minSharpnessScore = source.minSharpnessScore;
+    target->minBrightnessScore = source.minBrightnessScore;
+    target->maxBrightnessScore = source.maxBrightnessScore;
+}
+
+inspire::FaceCaptureConfig FromCCaptureConfig(const HFFaceCaptureConfig& source) {
+    inspire::FaceCaptureConfig target;
+    target.filterMask = source.filterMask;
+    target.outputCount = source.outputCount;
+    target.minTrackCount = source.minTrackCount;
+    target.stableDurationMs = source.stableDurationMs;
+    target.collectDurationMs = source.collectDurationMs;
+    target.maxCollectDurationMs = source.maxCollectDurationMs;
+    target.trackLostGraceMs = source.trackLostGraceMs;
+    target.minCandidateIntervalMs = source.minCandidateIntervalMs;
+    target.minFaceWidthRatio = source.minFaceWidthRatio;
+    target.maxFaceWidthRatio = source.maxFaceWidthRatio;
+    target.maxCenterOffsetX = source.maxCenterOffsetX;
+    target.maxCenterOffsetY = source.maxCenterOffsetY;
+    target.boundaryMarginRatio = source.boundaryMarginRatio;
+    target.maxCenterMotionRatio = source.maxCenterMotionRatio;
+    target.maxSizeChangeRatio = source.maxSizeChangeRatio;
+    target.maxAbsYaw = source.maxAbsYaw;
+    target.maxAbsPitch = source.maxAbsPitch;
+    target.maxAbsRoll = source.maxAbsRoll;
+    target.minQualityScore = source.minQualityScore;
+    target.minSharpnessScore = source.minSharpnessScore;
+    target.minBrightnessScore = source.minBrightnessScore;
+    target.maxBrightnessScore = source.maxBrightnessScore;
+    return target;
+}
+
+bool IsCaptureConfigHeaderValid(const HFFaceCaptureConfig* config) {
+    if (config == nullptr || config->structSize < sizeof(HFFaceCaptureConfig) ||
+        config->structVersion != HF_FACE_CAPTURE_CONFIG_VERSION) {
+        return false;
+    }
+    for (HFUInt32 value : config->reserved) {
+        if (value != 0) return false;
+    }
+    return true;
+}
+
+HResult DeserializeFaces(const HFMultipleFaceData& source, std::vector<inspire::FaceTrackWrap>* faces) {
+    if (faces == nullptr || source.detectedNum < 0 ||
+        (source.detectedNum > 0 && source.tokens == nullptr)) {
+        return HERR_INVALID_PARAM;
+    }
+    faces->clear();
+    faces->reserve(static_cast<size_t>(source.detectedNum));
+    for (HInt32 index = 0; index < source.detectedNum; ++index) {
+        const HFFaceBasicToken& token = source.tokens[index];
+        if (token.data == nullptr || token.size != static_cast<HInt32>(sizeof(inspire::FaceTrackWrap))) {
+            return HERR_SESS_FACE_DATA_ERROR;
+        }
+        inspire::FaceTrackWrap face{};
+        std::memcpy(&face, token.data, sizeof(face));
+        faces->push_back(face);
+    }
+    return HSUCCEED;
+}
+
 bool IsValidDetectMode(HFDetectMode mode) {
     return mode >= HF_DETECT_MODE_ALWAYS_DETECT && mode <= HF_DETECT_MODE_TRACK_BY_DETECTION;
 }
@@ -1316,6 +1438,202 @@ HResult HFGetFaceResultSnapshotData(HFFaceResultSnapshot snapshot, PHFMultipleFa
 HResult HFReleaseFaceResultSnapshot(HFFaceResultSnapshot snapshot) {
     if (!RESOURCE_MANAGE->releaseFaceResultSnapshot(reinterpret_cast<inspire::ResourceHandle>(snapshot))) {
         return HERR_INVALID_PARAM;
+    }
+    return HSUCCEED;
+}
+
+HResult HFGetDefaultFaceCaptureConfig(PHFFaceCaptureConfig config) {
+    if (config == nullptr) {
+        return HERR_INVALID_PARAM;
+    }
+    ToCCaptureConfig(DefaultCaptureConfig(), config);
+    return HSUCCEED;
+}
+
+HResult HFCreateFaceCaptureSession(HFSession session, const HFFaceCaptureConfig* config,
+                                   PHFFaceCaptureSession captureSession) {
+    if (captureSession == nullptr) {
+        return HERR_INVALID_PARAM;
+    }
+    *captureSession = nullptr;
+    if (!IsCaptureConfigHeaderValid(config)) {
+        return HERR_CAPTURE_INVALID_CONFIG;
+    }
+    auto sessionLease = AcquireSession(session);
+    if (!sessionLease) {
+        return HERR_INVALID_CONTEXT_HANDLE;
+    }
+    auto* algorithmSession = static_cast<HF_FaceAlgorithmSession*>(session);
+    try {
+        auto capture = std::make_shared<HF_FaceCaptureSession>();
+        capture->session = algorithmSession;
+        capture->session_lease = sessionLease;
+        const HResult status = capture->selector.Configure(FromCCaptureConfig(*config),
+                                                           algorithmSession->impl.getMParameter());
+        if (status != HSUCCEED) {
+            return status;
+        }
+        const auto resourceHandle = reinterpret_cast<inspire::ResourceHandle>(capture.get());
+        if (!RESOURCE_MANAGE->createFaceCaptureSession(resourceHandle, capture)) {
+            return HERR_UNKNOWN;
+        }
+        *captureSession = static_cast<HFFaceCaptureSession>(capture.get());
+        return HSUCCEED;
+    } catch (const std::exception& error) {
+        INSPIRE_LOGE("Failed to create face capture session: %s", error.what());
+        return HERR_UNKNOWN;
+    } catch (...) {
+        return HERR_UNKNOWN;
+    }
+}
+
+HResult HFUpdateFaceCaptureSession(HFFaceCaptureSession captureSession, HFImageStream stream,
+                                   HFUInt64 frameId, HFUInt64 timestampMs,
+                                   PHFFaceCaptureProgress progress) {
+    if (progress == nullptr) {
+        return HERR_INVALID_PARAM;
+    }
+    *progress = HFFaceCaptureProgress{};
+    auto captureLease = AcquireFaceCaptureSession(captureSession);
+    if (!captureLease) {
+        return HERR_CAPTURE_INVALID_HANDLE;
+    }
+    auto streamLease = AcquireStream(stream);
+    if (!streamLease) {
+        return HERR_INVALID_IMAGE_STREAM_HANDLE;
+    }
+    auto* capture = static_cast<HF_FaceCaptureSession*>(captureSession);
+    auto* cameraStream = static_cast<HF_CameraStream*>(stream);
+    std::lock_guard<std::mutex> lock(capture->mutex);
+    const HResult trackStatus = capture->session->impl.FaceDetectAndTrack(cameraStream->impl);
+    if (trackStatus != HSUCCEED) {
+        return trackStatus;
+    }
+    std::vector<inspire::FaceTrackWrap> faces;
+    const auto& cache = capture->session->impl.GetDetectCache();
+    faces.reserve(cache.size());
+    for (const auto& serialized : cache) {
+        inspire::FaceTrackWrap face{};
+        const HResult decodeStatus = inspire::RunDeserializeHyperFaceData(serialized, face);
+        if (decodeStatus != HSUCCEED) return decodeStatus;
+        faces.push_back(face);
+    }
+    inspire::FaceCaptureUpdate update;
+    const HResult status = capture->selector.Update(cameraStream->impl, faces, frameId, timestampMs, update);
+    if (status == HSUCCEED) {
+        capture->result_cache_dirty = true;
+        ToCaptureProgress(update, progress);
+    }
+    return status;
+}
+
+HResult HFUpdateFaceCaptureSessionWithSnapshot(HFFaceCaptureSession captureSession,
+                                               HFImageStream stream, HFFaceResultSnapshot snapshot,
+                                               HFUInt64 frameId, HFUInt64 timestampMs,
+                                               PHFFaceCaptureProgress progress) {
+    if (progress == nullptr) {
+        return HERR_INVALID_PARAM;
+    }
+    *progress = HFFaceCaptureProgress{};
+    auto captureLease = AcquireFaceCaptureSession(captureSession);
+    if (!captureLease) return HERR_CAPTURE_INVALID_HANDLE;
+    auto streamLease = AcquireStream(stream);
+    if (!streamLease) return HERR_INVALID_IMAGE_STREAM_HANDLE;
+    auto snapshotLease = AcquireFaceResultSnapshot(snapshot);
+    if (!snapshotLease) return HERR_INVALID_PARAM;
+
+    HFMultipleFaceData view{};
+    static_cast<HF_FaceResultSnapshot*>(snapshot)->GetView(&view);
+    std::vector<inspire::FaceTrackWrap> faces;
+    const HResult decodeStatus = DeserializeFaces(view, &faces);
+    if (decodeStatus != HSUCCEED) return decodeStatus;
+
+    auto* capture = static_cast<HF_FaceCaptureSession*>(captureSession);
+    auto* cameraStream = static_cast<HF_CameraStream*>(stream);
+    std::lock_guard<std::mutex> lock(capture->mutex);
+    inspire::FaceCaptureUpdate update;
+    const HResult status = capture->selector.Update(cameraStream->impl, faces, frameId, timestampMs, update);
+    if (status == HSUCCEED) {
+        capture->result_cache_dirty = true;
+        ToCaptureProgress(update, progress);
+    }
+    return status;
+}
+
+HResult HFGetFaceCaptureResults(HFFaceCaptureSession captureSession,
+                                PHFFaceCaptureResult results, HFUInt32 capacity,
+                                HFUInt32* resultCount) {
+    if (resultCount == nullptr || (results == nullptr && capacity != 0)) {
+        return HERR_INVALID_PARAM;
+    }
+    *resultCount = 0;
+    auto captureLease = AcquireFaceCaptureSession(captureSession);
+    if (!captureLease) return HERR_CAPTURE_INVALID_HANDLE;
+    auto* capture = static_cast<HF_FaceCaptureSession*>(captureSession);
+    std::lock_guard<std::mutex> lock(capture->mutex);
+    if (capture->result_cache_dirty) {
+        capture->result_cache = capture->selector.GetResults();
+        capture->result_cache_dirty = false;
+    }
+    const HFUInt32 required = static_cast<HFUInt32>(capture->result_cache.size());
+    *resultCount = required;
+    if (results == nullptr) return HSUCCEED;
+    if (capacity < required) return HERR_INVALID_BUFFER_SIZE;
+    for (HFUInt32 index = 0; index < required; ++index) {
+        const inspire::FaceCaptureCandidate& source = capture->result_cache[index];
+        HFFaceCaptureResult& target = results[index];
+        target = HFFaceCaptureResult{};
+        target.frameId = source.frameId;
+        target.timestampMs = source.timestampMs;
+        target.trackId = source.trackId;
+        target.trackCount = source.face.trackCount;
+        target.score = source.score;
+        target.rect.x = source.face.rect.x;
+        target.rect.y = source.face.rect.y;
+        target.rect.width = source.face.rect.width;
+        target.rect.height = source.face.rect.height;
+        target.roll = source.face.face3DAngle.roll;
+        target.yaw = source.face.face3DAngle.yaw;
+        target.pitch = source.face.face3DAngle.pitch;
+        target.token.size = static_cast<HInt32>(sizeof(source.face));
+        target.token.data = static_cast<HPVoid>(&capture->result_cache[index].face);
+        target.metrics = ToCaptureMetrics(source.metrics);
+    }
+    return HSUCCEED;
+}
+
+HResult HFFinishFaceCaptureSession(HFFaceCaptureSession captureSession,
+                                   PHFFaceCaptureProgress progress) {
+    if (progress == nullptr) return HERR_INVALID_PARAM;
+    *progress = HFFaceCaptureProgress{};
+    auto captureLease = AcquireFaceCaptureSession(captureSession);
+    if (!captureLease) return HERR_CAPTURE_INVALID_HANDLE;
+    auto* capture = static_cast<HF_FaceCaptureSession*>(captureSession);
+    std::lock_guard<std::mutex> lock(capture->mutex);
+    inspire::FaceCaptureUpdate update;
+    const HResult status = capture->selector.Finish(update);
+    if (status == HSUCCEED) {
+        capture->result_cache_dirty = true;
+        ToCaptureProgress(update, progress);
+    }
+    return status;
+}
+
+HResult HFResetFaceCaptureSession(HFFaceCaptureSession captureSession) {
+    auto captureLease = AcquireFaceCaptureSession(captureSession);
+    if (!captureLease) return HERR_CAPTURE_INVALID_HANDLE;
+    auto* capture = static_cast<HF_FaceCaptureSession*>(captureSession);
+    std::lock_guard<std::mutex> lock(capture->mutex);
+    capture->selector.Reset();
+    capture->result_cache.clear();
+    capture->result_cache_dirty = true;
+    return HSUCCEED;
+}
+
+HResult HFReleaseFaceCaptureSession(HFFaceCaptureSession captureSession) {
+    if (!RESOURCE_MANAGE->releaseFaceCaptureSession(
+          reinterpret_cast<inspire::ResourceHandle>(captureSession))) {
+        return HERR_CAPTURE_INVALID_HANDLE;
     }
     return HSUCCEED;
 }

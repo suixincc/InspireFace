@@ -85,6 +85,21 @@ set_target_properties(FaceTrackCandidateBenchmarkSample PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/sample/benchmark/"
 )
 
+add_executable(FaceCaptureSelectorGuardSample benchmark/face_capture_selector_guard.cpp)
+target_link_libraries(FaceCaptureSelectorGuardSample InspireFace ${ext})
+set_target_properties(FaceCaptureSelectorGuardSample PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/sample/benchmark/"
+)
+if(BUILD_TESTING)
+        add_test(NAME InspireFace.FaceCapture.SelectorGuard
+                COMMAND FaceCaptureSelectorGuardSample
+                        "${CMAKE_SOURCE_DIR}/test_res/pack/Pikachu"
+                        "${CMAKE_SOURCE_DIR}/test_res" 2000)
+        set_tests_properties(InspireFace.FaceCapture.SelectorGuard PROPERTIES
+                LABELS "capture;accuracy;performance"
+                TIMEOUT 60)
+endif()
+
 add_executable(FaceLandmarkSmoothingBenchmarkSample benchmark/face_landmark_smoothing_benchmark.cpp)
 target_link_libraries(FaceLandmarkSmoothingBenchmarkSample InspireFace ${ext})
 set_target_properties(FaceLandmarkSmoothingBenchmarkSample PROPERTIES

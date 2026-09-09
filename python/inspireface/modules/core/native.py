@@ -472,6 +472,10 @@ HFFaceResultSnapshot = POINTER(None)
 
 PHFFaceResultSnapshot = POINTER(POINTER(None))
 
+HFFaceCaptureSession = POINTER(None)
+
+PHFFaceCaptureSession = POINTER(POINTER(None))
+
 HPVoid = POINTER(None)# /Users/tunm/work/InspireFace/cpp/inspireface/c_api/intypedef.h: 17
 
 HFloat = c_float# /Users/tunm/work/InspireFace/cpp/inspireface/c_api/intypedef.h: 19
@@ -1103,6 +1107,172 @@ HFMultipleFaceData = struct_HFMultipleFaceData# /Users/tunm/work/InspireFace/cpp
 
 PHFMultipleFaceData = POINTER(struct_HFMultipleFaceData)# /Users/tunm/work/InspireFace/cpp/inspireface/c_api/inspireface.h: 616
 
+HFFaceCaptureState = c_int
+
+
+class struct_HFFaceCaptureConfig(Structure):
+    pass
+
+
+struct_HFFaceCaptureConfig.__slots__ = [
+    'structSize',
+    'structVersion',
+    'filterMask',
+    'outputCount',
+    'minTrackCount',
+    'stableDurationMs',
+    'collectDurationMs',
+    'maxCollectDurationMs',
+    'trackLostGraceMs',
+    'minCandidateIntervalMs',
+    'minFaceWidthRatio',
+    'maxFaceWidthRatio',
+    'maxCenterOffsetX',
+    'maxCenterOffsetY',
+    'boundaryMarginRatio',
+    'maxCenterMotionRatio',
+    'maxSizeChangeRatio',
+    'maxAbsYaw',
+    'maxAbsPitch',
+    'maxAbsRoll',
+    'minQualityScore',
+    'minSharpnessScore',
+    'minBrightnessScore',
+    'maxBrightnessScore',
+    'reserved',
+]
+struct_HFFaceCaptureConfig._fields_ = [
+    ('structSize', HFUInt32),
+    ('structVersion', HFUInt32),
+    ('filterMask', HFUInt64),
+    ('outputCount', HFUInt32),
+    ('minTrackCount', HFUInt32),
+    ('stableDurationMs', HFUInt64),
+    ('collectDurationMs', HFUInt64),
+    ('maxCollectDurationMs', HFUInt64),
+    ('trackLostGraceMs', HFUInt64),
+    ('minCandidateIntervalMs', HFUInt64),
+    ('minFaceWidthRatio', HFloat),
+    ('maxFaceWidthRatio', HFloat),
+    ('maxCenterOffsetX', HFloat),
+    ('maxCenterOffsetY', HFloat),
+    ('boundaryMarginRatio', HFloat),
+    ('maxCenterMotionRatio', HFloat),
+    ('maxSizeChangeRatio', HFloat),
+    ('maxAbsYaw', HFloat),
+    ('maxAbsPitch', HFloat),
+    ('maxAbsRoll', HFloat),
+    ('minQualityScore', HFloat),
+    ('minSharpnessScore', HFloat),
+    ('minBrightnessScore', HFloat),
+    ('maxBrightnessScore', HFloat),
+    ('reserved', HFUInt32 * int(8)),
+]
+
+HFFaceCaptureConfig = struct_HFFaceCaptureConfig
+PHFFaceCaptureConfig = POINTER(struct_HFFaceCaptureConfig)
+
+
+class struct_HFFaceCaptureMetrics(Structure):
+    pass
+
+
+struct_HFFaceCaptureMetrics.__slots__ = [
+    'availableMetrics',
+    'faceWidthRatio',
+    'centerOffsetX',
+    'centerOffsetY',
+    'stabilityScore',
+    'poseScore',
+    'qualityScore',
+    'sharpnessScore',
+    'brightnessScore',
+]
+struct_HFFaceCaptureMetrics._fields_ = [
+    ('availableMetrics', HFUInt64),
+    ('faceWidthRatio', HFloat),
+    ('centerOffsetX', HFloat),
+    ('centerOffsetY', HFloat),
+    ('stabilityScore', HFloat),
+    ('poseScore', HFloat),
+    ('qualityScore', HFloat),
+    ('sharpnessScore', HFloat),
+    ('brightnessScore', HFloat),
+]
+
+HFFaceCaptureMetrics = struct_HFFaceCaptureMetrics
+PHFFaceCaptureMetrics = POINTER(struct_HFFaceCaptureMetrics)
+
+
+class struct_HFFaceCaptureProgress(Structure):
+    pass
+
+
+struct_HFFaceCaptureProgress.__slots__ = [
+    'state',
+    'candidateCount',
+    'frameId',
+    'timestampMs',
+    'trackId',
+    'trackCount',
+    'evaluatedFilters',
+    'rejectReasons',
+    'progress',
+    'currentScore',
+    'metrics',
+]
+struct_HFFaceCaptureProgress._fields_ = [
+    ('state', HInt32),
+    ('candidateCount', HFUInt32),
+    ('frameId', HFUInt64),
+    ('timestampMs', HFUInt64),
+    ('trackId', HInt32),
+    ('trackCount', HInt32),
+    ('evaluatedFilters', HFUInt64),
+    ('rejectReasons', HFUInt64),
+    ('progress', HFloat),
+    ('currentScore', HFloat),
+    ('metrics', HFFaceCaptureMetrics),
+]
+
+HFFaceCaptureProgress = struct_HFFaceCaptureProgress
+PHFFaceCaptureProgress = POINTER(struct_HFFaceCaptureProgress)
+
+
+class struct_HFFaceCaptureResult(Structure):
+    pass
+
+
+struct_HFFaceCaptureResult.__slots__ = [
+    'frameId',
+    'timestampMs',
+    'trackId',
+    'trackCount',
+    'score',
+    'rect',
+    'roll',
+    'yaw',
+    'pitch',
+    'token',
+    'metrics',
+]
+struct_HFFaceCaptureResult._fields_ = [
+    ('frameId', HFUInt64),
+    ('timestampMs', HFUInt64),
+    ('trackId', HInt32),
+    ('trackCount', HInt32),
+    ('score', HFloat),
+    ('rect', HFaceRect),
+    ('roll', HFloat),
+    ('yaw', HFloat),
+    ('pitch', HFloat),
+    ('token', HFFaceBasicToken),
+    ('metrics', HFFaceCaptureMetrics),
+]
+
+HFFaceCaptureResult = struct_HFFaceCaptureResult
+PHFFaceCaptureResult = POINTER(struct_HFFaceCaptureResult)
+
 # /Users/tunm/work/InspireFace/cpp/inspireface/c_api/inspireface.h: 623
 if _libs[_LIBRARY_FILENAME].has("HFSessionClearTrackingFace", "cdecl"):
     HFSessionClearTrackingFace = _libs[_LIBRARY_FILENAME].get("HFSessionClearTrackingFace", "cdecl")
@@ -1189,6 +1359,66 @@ if _libs[_LIBRARY_FILENAME].has("HFReleaseFaceResultSnapshot", "cdecl"):
     HFReleaseFaceResultSnapshot = _libs[_LIBRARY_FILENAME].get("HFReleaseFaceResultSnapshot", "cdecl")
     HFReleaseFaceResultSnapshot.argtypes = [HFFaceResultSnapshot]
     HFReleaseFaceResultSnapshot.restype = HResult
+
+if _libs[_LIBRARY_FILENAME].has("HFGetDefaultFaceCaptureConfig", "cdecl"):
+    HFGetDefaultFaceCaptureConfig = _libs[_LIBRARY_FILENAME].get("HFGetDefaultFaceCaptureConfig", "cdecl")
+    HFGetDefaultFaceCaptureConfig.argtypes = [PHFFaceCaptureConfig]
+    HFGetDefaultFaceCaptureConfig.restype = HResult
+
+if _libs[_LIBRARY_FILENAME].has("HFCreateFaceCaptureSession", "cdecl"):
+    HFCreateFaceCaptureSession = _libs[_LIBRARY_FILENAME].get("HFCreateFaceCaptureSession", "cdecl")
+    HFCreateFaceCaptureSession.argtypes = [HFSession, PHFFaceCaptureConfig, PHFFaceCaptureSession]
+    HFCreateFaceCaptureSession.restype = HResult
+
+if _libs[_LIBRARY_FILENAME].has("HFUpdateFaceCaptureSession", "cdecl"):
+    HFUpdateFaceCaptureSession = _libs[_LIBRARY_FILENAME].get("HFUpdateFaceCaptureSession", "cdecl")
+    HFUpdateFaceCaptureSession.argtypes = [
+        HFFaceCaptureSession,
+        HFImageStream,
+        HFUInt64,
+        HFUInt64,
+        PHFFaceCaptureProgress,
+    ]
+    HFUpdateFaceCaptureSession.restype = HResult
+
+if _libs[_LIBRARY_FILENAME].has("HFUpdateFaceCaptureSessionWithSnapshot", "cdecl"):
+    HFUpdateFaceCaptureSessionWithSnapshot = _libs[_LIBRARY_FILENAME].get(
+        "HFUpdateFaceCaptureSessionWithSnapshot", "cdecl"
+    )
+    HFUpdateFaceCaptureSessionWithSnapshot.argtypes = [
+        HFFaceCaptureSession,
+        HFImageStream,
+        HFFaceResultSnapshot,
+        HFUInt64,
+        HFUInt64,
+        PHFFaceCaptureProgress,
+    ]
+    HFUpdateFaceCaptureSessionWithSnapshot.restype = HResult
+
+if _libs[_LIBRARY_FILENAME].has("HFGetFaceCaptureResults", "cdecl"):
+    HFGetFaceCaptureResults = _libs[_LIBRARY_FILENAME].get("HFGetFaceCaptureResults", "cdecl")
+    HFGetFaceCaptureResults.argtypes = [
+        HFFaceCaptureSession,
+        PHFFaceCaptureResult,
+        HFUInt32,
+        POINTER(HFUInt32),
+    ]
+    HFGetFaceCaptureResults.restype = HResult
+
+if _libs[_LIBRARY_FILENAME].has("HFFinishFaceCaptureSession", "cdecl"):
+    HFFinishFaceCaptureSession = _libs[_LIBRARY_FILENAME].get("HFFinishFaceCaptureSession", "cdecl")
+    HFFinishFaceCaptureSession.argtypes = [HFFaceCaptureSession, PHFFaceCaptureProgress]
+    HFFinishFaceCaptureSession.restype = HResult
+
+if _libs[_LIBRARY_FILENAME].has("HFResetFaceCaptureSession", "cdecl"):
+    HFResetFaceCaptureSession = _libs[_LIBRARY_FILENAME].get("HFResetFaceCaptureSession", "cdecl")
+    HFResetFaceCaptureSession.argtypes = [HFFaceCaptureSession]
+    HFResetFaceCaptureSession.restype = HResult
+
+if _libs[_LIBRARY_FILENAME].has("HFReleaseFaceCaptureSession", "cdecl"):
+    HFReleaseFaceCaptureSession = _libs[_LIBRARY_FILENAME].get("HFReleaseFaceCaptureSession", "cdecl")
+    HFReleaseFaceCaptureSession.argtypes = [HFFaceCaptureSession]
+    HFReleaseFaceCaptureSession.restype = HResult
 
 # /Users/tunm/work/InspireFace/cpp/inspireface/c_api/inspireface.h: 721
 if _libs[_LIBRARY_FILENAME].has("HFSessionLastFaceDetectionGetDebugPreviewImageSize", "cdecl"):
@@ -1941,6 +2171,10 @@ HF_C_API_LEVEL = 2
 
 HF_SESSION_CONFIG_V2_VERSION = 1
 
+HF_FACE_CAPTURE_CONFIG_VERSION = 1
+
+HF_FACE_CAPTURE_MAX_RESULTS = 8
+
 HF_RESOURCE_PACK_INFO_VERSION = 1
 
 HF_RESOURCE_PACK_TAG_CAPACITY = 64
@@ -1984,6 +2218,39 @@ HF_ENABLE_FACE_POSE = 0x00000200
 # /Users/tunm/work/InspireFace/cpp/inspireface/c_api/inspireface.h: 40
 HF_ENABLE_FACE_EMOTION = 0x00000400
 
+HF_CAPTURE_FILTER_NONE = 0
+HF_CAPTURE_FILTER_FACE_COUNT = 1 << 0
+HF_CAPTURE_FILTER_FACE_SIZE = 1 << 1
+HF_CAPTURE_FILTER_FACE_POSITION = 1 << 2
+HF_CAPTURE_FILTER_FACE_BOUNDARY = 1 << 3
+HF_CAPTURE_FILTER_STABILITY = 1 << 4
+HF_CAPTURE_FILTER_POSE = 1 << 5
+HF_CAPTURE_FILTER_QUALITY = 1 << 6
+HF_CAPTURE_FILTER_SHARPNESS = 1 << 7
+HF_CAPTURE_FILTER_BRIGHTNESS = 1 << 8
+HF_CAPTURE_FILTER_TRACK_COUNT = 1 << 9
+
+HF_CAPTURE_REJECT_NONE = 0
+HF_CAPTURE_REJECT_NO_FACE = 1 << 0
+HF_CAPTURE_REJECT_MULTIPLE_FACES = 1 << 1
+HF_CAPTURE_REJECT_FACE_TOO_SMALL = 1 << 2
+HF_CAPTURE_REJECT_FACE_TOO_LARGE = 1 << 3
+HF_CAPTURE_REJECT_FACE_OFF_CENTER = 1 << 4
+HF_CAPTURE_REJECT_FACE_OUT_OF_BOUNDS = 1 << 5
+HF_CAPTURE_REJECT_UNSTABLE = 1 << 6
+HF_CAPTURE_REJECT_POSE = 1 << 7
+HF_CAPTURE_REJECT_QUALITY = 1 << 8
+HF_CAPTURE_REJECT_SHARPNESS = 1 << 9
+HF_CAPTURE_REJECT_BRIGHTNESS = 1 << 10
+HF_CAPTURE_REJECT_TRACK_COUNT_TOO_LOW = 1 << 11
+
+HF_CAPTURE_STATE_IDLE = 0
+HF_CAPTURE_STATE_STABILIZING = 1
+HF_CAPTURE_STATE_COLLECTING = 2
+HF_CAPTURE_STATE_READY = 3
+HF_CAPTURE_STATE_FINISHED = 4
+HF_CAPTURE_STATE_TRACK_LOST = 5
+
 HFImageData = struct_HFImageData# /Users/tunm/work/InspireFace/cpp/inspireface/c_api/inspireface.h: 123
 
 HFImageBitmapData = struct_HFImageBitmapData# /Users/tunm/work/InspireFace/cpp/inspireface/c_api/inspireface.h: 200
@@ -2001,6 +2268,14 @@ HFFaceBasicToken = struct_HFFaceBasicToken# /Users/tunm/work/InspireFace/cpp/ins
 HFFaceEulerAngle = struct_HFFaceEulerAngle# /Users/tunm/work/InspireFace/cpp/inspireface/c_api/inspireface.h: 600
 
 HFMultipleFaceData = struct_HFMultipleFaceData# /Users/tunm/work/InspireFace/cpp/inspireface/c_api/inspireface.h: 616
+
+HFFaceCaptureConfig = struct_HFFaceCaptureConfig
+
+HFFaceCaptureMetrics = struct_HFFaceCaptureMetrics
+
+HFFaceCaptureProgress = struct_HFFaceCaptureProgress
+
+HFFaceCaptureResult = struct_HFFaceCaptureResult
 
 HFFaceFeature = struct_HFFaceFeature# /Users/tunm/work/InspireFace/cpp/inspireface/c_api/inspireface.h: 809
 

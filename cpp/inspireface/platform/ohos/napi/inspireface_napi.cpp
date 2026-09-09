@@ -22,6 +22,7 @@ constexpr napi_type_tag kSessionTypeTag = {0x8e68a46fd3b9460dULL, 0xa37adf709e45
 constexpr napi_type_tag kImageStreamTypeTag = {0x20e8d7e8040f43b1ULL, 0xa2d11c912ea59bbfULL};
 constexpr napi_type_tag kFaceResultTypeTag = {0xf8ea4a8ad49941ceULL, 0xbeb80ecf8b1752c8ULL};
 constexpr napi_type_tag kImageBitmapTypeTag = {0x6621012739bd4ffbULL, 0x95589cfc1170c5a2ULL};
+constexpr napi_type_tag kFaceCaptureTypeTag = {0x55e071e5df8d4fa8ULL, 0x871901c0e231550cULL};
 std::atomic<uint64_t> g_next_state_identity{1};
 
 struct SessionState {
@@ -76,6 +77,19 @@ struct ImageBitmapState {
         std::lock_guard<std::mutex> lock(mutex);
         if (handle) {
             HFReleaseImageBitmap(handle);
+            handle = nullptr;
+        }
+    }
+};
+
+struct FaceCaptureState {
+    std::mutex mutex;
+    HFFaceCaptureSession handle = nullptr;
+
+    ~FaceCaptureState() {
+        std::lock_guard<std::mutex> lock(mutex);
+        if (handle) {
+            HFReleaseFaceCaptureSession(handle);
             handle = nullptr;
         }
     }
@@ -236,6 +250,31 @@ bool GetOptionalDouble(napi_env env, napi_value object, const char* name, double
         return false;
     }
     *present = true;
+    return true;
+}
+
+bool GetOptionalUInt64(napi_env env, napi_value object, const char* name, uint64_t* value, bool* present) {
+    double numeric = 0.0;
+    if (!value || !present || !GetOptionalDouble(env, object, name, &numeric, present)) return false;
+    constexpr double kMaxSafeInteger = 9007199254740991.0;
+    if (*present && (!std::isfinite(numeric) || numeric < 0.0 || numeric > kMaxSafeInteger ||
+                     std::trunc(numeric) != numeric)) {
+        napi_throw_range_error(env, "ERR_INSPIREFACE_RANGE", "Capture timing values must be non-negative safe integers");
+        return false;
+    }
+    if (*present) *value = static_cast<uint64_t>(numeric);
+    return true;
+}
+
+bool ReadUInt64(napi_env env, napi_value value, uint64_t* output) {
+    double numeric = 0.0;
+    constexpr double kMaxSafeInteger = 9007199254740991.0;
+    if (!output || !CheckNapi(env, napi_get_value_double(env, value, &numeric), "read unsigned integer")) return false;
+    if (!std::isfinite(numeric) || numeric < 0.0 || numeric > kMaxSafeInteger || std::trunc(numeric) != numeric) {
+        napi_throw_range_error(env, "ERR_INSPIREFACE_RANGE", "Frame ID and timestamp must be non-negative safe integers");
+        return false;
+    }
+    *output = static_cast<uint64_t>(numeric);
     return true;
 }
 
@@ -472,6 +511,73 @@ bool SetString(napi_env env, napi_value object, const char* name, const char* va
     napi_value string = nullptr;
     return CheckNapi(env, napi_create_string_utf8(env, value ? value : "", NAPI_AUTO_LENGTH, &string), "create string") &&
            CheckNapi(env, napi_set_named_property(env, object, name, string), "set string property");
+}
+
+napi_value CreateCaptureMetrics(napi_env env, const HFFaceCaptureMetrics& metrics) {
+    napi_value output = nullptr;
+    if (!CheckNapi(env, napi_create_object(env, &output), "create capture metrics") ||
+        !SetDouble(env, output, "availableMetrics", static_cast<double>(metrics.availableMetrics)) ||
+        !SetDouble(env, output, "faceWidthRatio", metrics.faceWidthRatio) ||
+        !SetDouble(env, output, "centerOffsetX", metrics.centerOffsetX) ||
+        !SetDouble(env, output, "centerOffsetY", metrics.centerOffsetY) ||
+        !SetDouble(env, output, "stabilityScore", metrics.stabilityScore) ||
+        !SetDouble(env, output, "poseScore", metrics.poseScore) ||
+        !SetDouble(env, output, "qualityScore", metrics.qualityScore) ||
+        !SetDouble(env, output, "sharpnessScore", metrics.sharpnessScore) ||
+        !SetDouble(env, output, "brightnessScore", metrics.brightnessScore)) {
+        return nullptr;
+    }
+    return output;
+}
+
+napi_value CreateCaptureProgress(napi_env env, const HFFaceCaptureProgress& progress) {
+    napi_value output = nullptr;
+    napi_value metrics = CreateCaptureMetrics(env, progress.metrics);
+    if (!metrics || !CheckNapi(env, napi_create_object(env, &output), "create capture progress") ||
+        !SetInt32(env, output, "state", progress.state) ||
+        !SetInt32(env, output, "candidateCount", static_cast<int32_t>(progress.candidateCount)) ||
+        !SetDouble(env, output, "frameId", static_cast<double>(progress.frameId)) ||
+        !SetDouble(env, output, "timestampMs", static_cast<double>(progress.timestampMs)) ||
+        !SetInt32(env, output, "trackId", progress.trackId) ||
+        !SetInt32(env, output, "trackCount", progress.trackCount) ||
+        !SetDouble(env, output, "evaluatedFilters", static_cast<double>(progress.evaluatedFilters)) ||
+        !SetDouble(env, output, "rejectReasons", static_cast<double>(progress.rejectReasons)) ||
+        !SetDouble(env, output, "progress", progress.progress) ||
+        !SetDouble(env, output, "currentScore", progress.currentScore) ||
+        !CheckNapi(env, napi_set_named_property(env, output, "metrics", metrics), "set capture metrics")) {
+        return nullptr;
+    }
+    return output;
+}
+
+napi_value CreateCaptureConfig(napi_env env, const HFFaceCaptureConfig& config) {
+    napi_value output = nullptr;
+    if (!CheckNapi(env, napi_create_object(env, &output), "create capture config") ||
+        !SetDouble(env, output, "filterMask", static_cast<double>(config.filterMask)) ||
+        !SetInt32(env, output, "outputCount", static_cast<int32_t>(config.outputCount)) ||
+        !SetInt32(env, output, "minTrackCount", static_cast<int32_t>(config.minTrackCount)) ||
+        !SetDouble(env, output, "stableDurationMs", static_cast<double>(config.stableDurationMs)) ||
+        !SetDouble(env, output, "collectDurationMs", static_cast<double>(config.collectDurationMs)) ||
+        !SetDouble(env, output, "maxCollectDurationMs", static_cast<double>(config.maxCollectDurationMs)) ||
+        !SetDouble(env, output, "trackLostGraceMs", static_cast<double>(config.trackLostGraceMs)) ||
+        !SetDouble(env, output, "minCandidateIntervalMs", static_cast<double>(config.minCandidateIntervalMs)) ||
+        !SetDouble(env, output, "minFaceWidthRatio", config.minFaceWidthRatio) ||
+        !SetDouble(env, output, "maxFaceWidthRatio", config.maxFaceWidthRatio) ||
+        !SetDouble(env, output, "maxCenterOffsetX", config.maxCenterOffsetX) ||
+        !SetDouble(env, output, "maxCenterOffsetY", config.maxCenterOffsetY) ||
+        !SetDouble(env, output, "boundaryMarginRatio", config.boundaryMarginRatio) ||
+        !SetDouble(env, output, "maxCenterMotionRatio", config.maxCenterMotionRatio) ||
+        !SetDouble(env, output, "maxSizeChangeRatio", config.maxSizeChangeRatio) ||
+        !SetDouble(env, output, "maxAbsYaw", config.maxAbsYaw) ||
+        !SetDouble(env, output, "maxAbsPitch", config.maxAbsPitch) ||
+        !SetDouble(env, output, "maxAbsRoll", config.maxAbsRoll) ||
+        !SetDouble(env, output, "minQualityScore", config.minQualityScore) ||
+        !SetDouble(env, output, "minSharpnessScore", config.minSharpnessScore) ||
+        !SetDouble(env, output, "minBrightnessScore", config.minBrightnessScore) ||
+        !SetDouble(env, output, "maxBrightnessScore", config.maxBrightnessScore)) {
+        return nullptr;
+    }
+    return output;
 }
 
 bool SetFaceId(napi_env env, napi_value object, const char* name, HFaceId value) {
@@ -1288,6 +1394,235 @@ napi_value ReleaseFaceResult(napi_env env, napi_callback_info info) {
             return ThrowSdkError(env, result, "release face result");
         }
         state->handle = nullptr;
+        return Undefined(env);
+    });
+}
+
+napi_value NapiGetDefaultFaceCaptureConfig(napi_env env, napi_callback_info info) {
+    return GuardCallback(env, [&]() -> napi_value {
+        if (!ReadArguments(env, info, 0, nullptr)) return nullptr;
+        HFFaceCaptureConfig config{};
+        const HResult result = HFGetDefaultFaceCaptureConfig(&config);
+        return result == HSUCCEED ? CreateCaptureConfig(env, config)
+                                  : ThrowSdkError(env, result, "get default face capture config");
+    });
+}
+
+napi_value CreateFaceCaptureSession(napi_env env, napi_callback_info info) {
+    return GuardCallback(env, [&]() -> napi_value {
+        napi_value arguments[2] = {nullptr, nullptr};
+        if (!ReadArguments(env, info, 2, arguments)) return nullptr;
+        SessionState* session =
+          UnwrapState<SessionState>(env, arguments[0], kSessionTypeTag, "Expected InspireFace session handle");
+        if (!session) return nullptr;
+
+        HFFaceCaptureConfig config{};
+        HResult result = HFGetDefaultFaceCaptureConfig(&config);
+        if (result != HSUCCEED) return ThrowSdkError(env, result, "get default face capture config");
+        bool present = false;
+        int64_t filterMask = 0;
+        int32_t outputCount = 0;
+        int32_t minTrackCount = 0;
+        if (!GetOptionalInt64(env, arguments[1], "filterMask", &filterMask, &present)) return nullptr;
+        if (present) {
+            if (filterMask < 0) return ThrowRangeError(env, "filterMask must be non-negative");
+            config.filterMask = static_cast<HFUInt64>(filterMask);
+        }
+        if (!GetOptionalInt32(env, arguments[1], "outputCount", &outputCount, &present)) return nullptr;
+        if (present) {
+            if (outputCount < 0) return ThrowRangeError(env, "outputCount must be non-negative");
+            config.outputCount = static_cast<HFUInt32>(outputCount);
+        }
+        if (!GetOptionalInt32(env, arguments[1], "minTrackCount", &minTrackCount, &present)) return nullptr;
+        if (present) {
+            if (minTrackCount < 0) return ThrowRangeError(env, "minTrackCount must be non-negative");
+            config.minTrackCount = static_cast<HFUInt32>(minTrackCount);
+        }
+        if (!GetOptionalUInt64(env, arguments[1], "stableDurationMs", &config.stableDurationMs, &present) ||
+            !GetOptionalUInt64(env, arguments[1], "collectDurationMs", &config.collectDurationMs, &present) ||
+            !GetOptionalUInt64(env, arguments[1], "maxCollectDurationMs", &config.maxCollectDurationMs, &present) ||
+            !GetOptionalUInt64(env, arguments[1], "trackLostGraceMs", &config.trackLostGraceMs, &present) ||
+            !GetOptionalUInt64(env, arguments[1], "minCandidateIntervalMs", &config.minCandidateIntervalMs, &present)) {
+            return nullptr;
+        }
+#define READ_CAPTURE_FLOAT(name, field)                                                        \
+        do {                                                                                   \
+            double numeric = 0.0;                                                              \
+            if (!GetOptionalDouble(env, arguments[1], name, &numeric, &present)) return nullptr; \
+            if (present) config.field = static_cast<HFloat>(numeric);                          \
+        } while (false)
+        READ_CAPTURE_FLOAT("minFaceWidthRatio", minFaceWidthRatio);
+        READ_CAPTURE_FLOAT("maxFaceWidthRatio", maxFaceWidthRatio);
+        READ_CAPTURE_FLOAT("maxCenterOffsetX", maxCenterOffsetX);
+        READ_CAPTURE_FLOAT("maxCenterOffsetY", maxCenterOffsetY);
+        READ_CAPTURE_FLOAT("boundaryMarginRatio", boundaryMarginRatio);
+        READ_CAPTURE_FLOAT("maxCenterMotionRatio", maxCenterMotionRatio);
+        READ_CAPTURE_FLOAT("maxSizeChangeRatio", maxSizeChangeRatio);
+        READ_CAPTURE_FLOAT("maxAbsYaw", maxAbsYaw);
+        READ_CAPTURE_FLOAT("maxAbsPitch", maxAbsPitch);
+        READ_CAPTURE_FLOAT("maxAbsRoll", maxAbsRoll);
+        READ_CAPTURE_FLOAT("minQualityScore", minQualityScore);
+        READ_CAPTURE_FLOAT("minSharpnessScore", minSharpnessScore);
+        READ_CAPTURE_FLOAT("minBrightnessScore", minBrightnessScore);
+        READ_CAPTURE_FLOAT("maxBrightnessScore", maxBrightnessScore);
+#undef READ_CAPTURE_FLOAT
+
+        auto* capture = new (std::nothrow) FaceCaptureState();
+        if (!capture) {
+            napi_throw_error(env, "ERR_INSPIREFACE_NO_MEMORY", "Unable to allocate face capture wrapper");
+            return nullptr;
+        }
+        {
+            std::lock_guard<std::mutex> lock(session->mutex);
+            if (!session->handle) {
+                delete capture;
+                return ThrowTypeError(env, "Session has already been released");
+            }
+            result = HFCreateFaceCaptureSession(session->handle, &config, &capture->handle);
+        }
+        if (result != HSUCCEED) {
+            delete capture;
+            return ThrowSdkError(env, result, "create face capture session");
+        }
+        return WrapState(env, capture, kFaceCaptureTypeTag);
+    });
+}
+
+napi_value UpdateFaceCaptureSession(napi_env env, napi_callback_info info) {
+    return GuardCallback(env, [&]() -> napi_value {
+        napi_value arguments[5] = {nullptr, nullptr, nullptr, nullptr, nullptr};
+        if (!ReadArguments(env, info, 5, arguments)) return nullptr;
+        FaceCaptureState* capture = UnwrapState<FaceCaptureState>(
+          env, arguments[0], kFaceCaptureTypeTag, "Expected InspireFace face capture handle");
+        ImageStreamState* image = UnwrapState<ImageStreamState>(
+          env, arguments[1], kImageStreamTypeTag, "Expected InspireFace image stream handle");
+        if (!capture || !image) return nullptr;
+        uint64_t frameId = 0;
+        uint64_t timestampMs = 0;
+        if (!ReadUInt64(env, arguments[3], &frameId) || !ReadUInt64(env, arguments[4], &timestampMs)) return nullptr;
+        napi_valuetype resultType = napi_undefined;
+        if (!CheckNapi(env, napi_typeof(env, arguments[2], &resultType), "read optional face result type")) return nullptr;
+        FaceResultState* faceResult = nullptr;
+        if (resultType != napi_null && resultType != napi_undefined) {
+            faceResult = UnwrapState<FaceResultState>(
+              env, arguments[2], kFaceResultTypeTag, "Expected InspireFace face result handle or null");
+            if (!faceResult) return nullptr;
+        }
+
+        HFFaceCaptureProgress progress{};
+        HResult result = HERR_UNKNOWN;
+        if (faceResult) {
+            std::unique_lock<std::mutex> captureLock(capture->mutex, std::defer_lock);
+            std::unique_lock<std::mutex> imageLock(image->mutex, std::defer_lock);
+            std::unique_lock<std::mutex> resultLock(faceResult->mutex, std::defer_lock);
+            std::lock(captureLock, imageLock, resultLock);
+            if (!capture->handle || !image->handle || !faceResult->handle) {
+                return ThrowTypeError(env, "Capture session, image stream, or face result has already been released");
+            }
+            result = HFUpdateFaceCaptureSessionWithSnapshot(capture->handle, image->handle, faceResult->handle,
+                                                            frameId, timestampMs, &progress);
+        } else {
+            std::unique_lock<std::mutex> captureLock(capture->mutex, std::defer_lock);
+            std::unique_lock<std::mutex> imageLock(image->mutex, std::defer_lock);
+            std::lock(captureLock, imageLock);
+            if (!capture->handle || !image->handle) {
+                return ThrowTypeError(env, "Capture session or image stream has already been released");
+            }
+            result = HFUpdateFaceCaptureSession(capture->handle, image->handle, frameId, timestampMs, &progress);
+        }
+        return result == HSUCCEED ? CreateCaptureProgress(env, progress)
+                                  : ThrowSdkError(env, result, "update face capture session");
+    });
+}
+
+napi_value GetFaceCaptureResults(napi_env env, napi_callback_info info) {
+    return GuardCallback(env, [&]() -> napi_value {
+        napi_value arguments[1] = {nullptr};
+        if (!ReadArguments(env, info, 1, arguments)) return nullptr;
+        FaceCaptureState* capture = UnwrapState<FaceCaptureState>(
+          env, arguments[0], kFaceCaptureTypeTag, "Expected InspireFace face capture handle");
+        if (!capture) return nullptr;
+        std::lock_guard<std::mutex> lock(capture->mutex);
+        if (!capture->handle) return ThrowTypeError(env, "Face capture session has already been released");
+        HFUInt32 count = 0;
+        HResult result = HFGetFaceCaptureResults(capture->handle, nullptr, 0, &count);
+        if (result != HSUCCEED) return ThrowSdkError(env, result, "query face capture results");
+        std::vector<HFFaceCaptureResult> values(count);
+        if (count > 0) {
+            result = HFGetFaceCaptureResults(capture->handle, values.data(), count, &count);
+            if (result != HSUCCEED) return ThrowSdkError(env, result, "get face capture results");
+        }
+        napi_value array = nullptr;
+        if (!CheckNapi(env, napi_create_array_with_length(env, count, &array), "create face capture result array")) return nullptr;
+        for (HFUInt32 index = 0; index < count; ++index) {
+            const auto& value = values[index];
+            napi_value item = nullptr;
+            napi_value rect = nullptr;
+            napi_value metrics = CreateCaptureMetrics(env, value.metrics);
+            napi_value token = CreateTypedArray(env, napi_uint8_array, value.token.data,
+                                                static_cast<size_t>(value.token.size), sizeof(uint8_t));
+            if (!metrics || !token || !CheckNapi(env, napi_create_object(env, &item), "create face capture result") ||
+                !CheckNapi(env, napi_create_object(env, &rect), "create face capture rectangle") ||
+                !SetInt32(env, rect, "x", value.rect.x) || !SetInt32(env, rect, "y", value.rect.y) ||
+                !SetInt32(env, rect, "width", value.rect.width) || !SetInt32(env, rect, "height", value.rect.height) ||
+                !SetDouble(env, item, "frameId", static_cast<double>(value.frameId)) ||
+                !SetDouble(env, item, "timestampMs", static_cast<double>(value.timestampMs)) ||
+                !SetInt32(env, item, "trackId", value.trackId) || !SetInt32(env, item, "trackCount", value.trackCount) ||
+                !SetDouble(env, item, "score", value.score) || !SetDouble(env, item, "roll", value.roll) ||
+                !SetDouble(env, item, "yaw", value.yaw) || !SetDouble(env, item, "pitch", value.pitch) ||
+                !CheckNapi(env, napi_set_named_property(env, item, "rect", rect), "set face capture rectangle") ||
+                !CheckNapi(env, napi_set_named_property(env, item, "token", token), "set face capture token") ||
+                !CheckNapi(env, napi_set_named_property(env, item, "metrics", metrics), "set face capture metrics") ||
+                !CheckNapi(env, napi_set_element(env, array, index, item), "set face capture result")) {
+                return nullptr;
+            }
+        }
+        return array;
+    });
+}
+
+napi_value FinishFaceCaptureSession(napi_env env, napi_callback_info info) {
+    return GuardCallback(env, [&]() -> napi_value {
+        napi_value arguments[1] = {nullptr};
+        if (!ReadArguments(env, info, 1, arguments)) return nullptr;
+        FaceCaptureState* capture = UnwrapState<FaceCaptureState>(
+          env, arguments[0], kFaceCaptureTypeTag, "Expected InspireFace face capture handle");
+        if (!capture) return nullptr;
+        std::lock_guard<std::mutex> lock(capture->mutex);
+        if (!capture->handle) return ThrowTypeError(env, "Face capture session has already been released");
+        HFFaceCaptureProgress progress{};
+        const HResult result = HFFinishFaceCaptureSession(capture->handle, &progress);
+        return result == HSUCCEED ? CreateCaptureProgress(env, progress)
+                                  : ThrowSdkError(env, result, "finish face capture session");
+    });
+}
+
+napi_value ResetFaceCaptureSession(napi_env env, napi_callback_info info) {
+    return GuardCallback(env, [&]() -> napi_value {
+        napi_value arguments[1] = {nullptr};
+        if (!ReadArguments(env, info, 1, arguments)) return nullptr;
+        FaceCaptureState* capture = UnwrapState<FaceCaptureState>(
+          env, arguments[0], kFaceCaptureTypeTag, "Expected InspireFace face capture handle");
+        if (!capture) return nullptr;
+        std::lock_guard<std::mutex> lock(capture->mutex);
+        if (!capture->handle) return ThrowTypeError(env, "Face capture session has already been released");
+        const HResult result = HFResetFaceCaptureSession(capture->handle);
+        return result == HSUCCEED ? Undefined(env) : ThrowSdkError(env, result, "reset face capture session");
+    });
+}
+
+napi_value ReleaseFaceCaptureSession(napi_env env, napi_callback_info info) {
+    return GuardCallback(env, [&]() -> napi_value {
+        napi_value arguments[1] = {nullptr};
+        if (!ReadArguments(env, info, 1, arguments)) return nullptr;
+        FaceCaptureState* capture = UnwrapState<FaceCaptureState>(
+          env, arguments[0], kFaceCaptureTypeTag, "Expected InspireFace face capture handle");
+        if (!capture) return nullptr;
+        std::lock_guard<std::mutex> lock(capture->mutex);
+        if (!capture->handle) return Undefined(env);
+        const HResult result = HFReleaseFaceCaptureSession(capture->handle);
+        if (result != HSUCCEED) return ThrowSdkError(env, result, "release face capture session");
+        capture->handle = nullptr;
         return Undefined(env);
     });
 }
@@ -2354,6 +2689,13 @@ napi_value Init(napi_env env, napi_value exports) {
       {"showImageBitmap", nullptr, ShowImageBitmap, nullptr, nullptr, nullptr, napi_default, nullptr},
       {"track", nullptr, Track, nullptr, nullptr, nullptr, napi_default, nullptr},
       {"releaseFaceResult", nullptr, ReleaseFaceResult, nullptr, nullptr, nullptr, napi_default, nullptr},
+      {"getDefaultFaceCaptureConfig", nullptr, NapiGetDefaultFaceCaptureConfig, nullptr, nullptr, nullptr, napi_default, nullptr},
+      {"createFaceCaptureSession", nullptr, CreateFaceCaptureSession, nullptr, nullptr, nullptr, napi_default, nullptr},
+      {"updateFaceCaptureSession", nullptr, UpdateFaceCaptureSession, nullptr, nullptr, nullptr, napi_default, nullptr},
+      {"getFaceCaptureResults", nullptr, GetFaceCaptureResults, nullptr, nullptr, nullptr, napi_default, nullptr},
+      {"finishFaceCaptureSession", nullptr, FinishFaceCaptureSession, nullptr, nullptr, nullptr, napi_default, nullptr},
+      {"resetFaceCaptureSession", nullptr, ResetFaceCaptureSession, nullptr, nullptr, nullptr, napi_default, nullptr},
+      {"releaseFaceCaptureSession", nullptr, ReleaseFaceCaptureSession, nullptr, nullptr, nullptr, napi_default, nullptr},
       {"processPipeline", nullptr, ProcessPipeline, nullptr, nullptr, nullptr, napi_default, nullptr},
       {"detectFaceQuality", nullptr, DetectFaceQuality, nullptr, nullptr, nullptr, napi_default, nullptr},
       {"getDenseLandmarks", nullptr, GetDenseLandmarks, nullptr, nullptr, nullptr, napi_default, nullptr},

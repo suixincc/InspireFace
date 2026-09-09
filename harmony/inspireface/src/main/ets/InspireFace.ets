@@ -1,5 +1,5 @@
-import native, { NativeFaceResultHandle, NativeImageBitmapHandle, NativeImageStreamHandle,
-  NativeSessionHandle } from 'libinspireface_napi.so';
+import native, { NativeFaceCaptureHandle, NativeFaceResultHandle, NativeImageBitmapHandle,
+  NativeImageStreamHandle, NativeSessionHandle } from 'libinspireface_napi.so';
 
 export enum ErrorCode {
   SUCCESS = 0,
@@ -48,7 +48,50 @@ export enum ErrorCode {
   EXTENSION_HETERO_MODEL_TAG_ERROR = 353,
   EXTENSION_RECOGNITION_HEAD_CONFIG_ERROR = 354,
   EXTENSION_HETERO_MODEL_NOT_MATCH = 355,
-  EXTENSION_HETERO_MODEL_NOT_LOADED = 356
+  EXTENSION_HETERO_MODEL_NOT_LOADED = 356,
+  CAPTURE_INVALID_CONFIG = 401,
+  CAPTURE_REQUIRED_FEATURE_OFF = 402,
+  CAPTURE_FRAME_OUT_OF_ORDER = 403,
+  CAPTURE_INVALID_HANDLE = 404
+}
+
+export enum FaceCaptureFilter {
+  NONE = 0,
+  FACE_COUNT = 1 << 0,
+  FACE_SIZE = 1 << 1,
+  FACE_POSITION = 1 << 2,
+  FACE_BOUNDARY = 1 << 3,
+  STABILITY = 1 << 4,
+  POSE = 1 << 5,
+  QUALITY = 1 << 6,
+  SHARPNESS = 1 << 7,
+  BRIGHTNESS = 1 << 8,
+  TRACK_COUNT = 1 << 9
+}
+
+export enum FaceCaptureRejectReason {
+  NONE = 0,
+  NO_FACE = 1 << 0,
+  MULTIPLE_FACES = 1 << 1,
+  FACE_TOO_SMALL = 1 << 2,
+  FACE_TOO_LARGE = 1 << 3,
+  FACE_OFF_CENTER = 1 << 4,
+  FACE_OUT_OF_BOUNDS = 1 << 5,
+  UNSTABLE = 1 << 6,
+  POSE = 1 << 7,
+  QUALITY = 1 << 8,
+  SHARPNESS = 1 << 9,
+  BRIGHTNESS = 1 << 10,
+  TRACK_COUNT_TOO_LOW = 1 << 11
+}
+
+export enum FaceCaptureState {
+  IDLE = 0,
+  STABILIZING = 1,
+  COLLECTING = 2,
+  READY = 3,
+  FINISHED = 4,
+  TRACK_LOST = 5
 }
 
 export enum Feature {
@@ -247,6 +290,71 @@ export interface FaceTrackResult {
   faces: TrackedFace[];
 }
 
+export interface FaceCaptureConfig {
+  filterMask?: number;
+  outputCount?: number;
+  minTrackCount?: number;
+  stableDurationMs?: number;
+  collectDurationMs?: number;
+  maxCollectDurationMs?: number;
+  trackLostGraceMs?: number;
+  minCandidateIntervalMs?: number;
+  minFaceWidthRatio?: number;
+  maxFaceWidthRatio?: number;
+  maxCenterOffsetX?: number;
+  maxCenterOffsetY?: number;
+  boundaryMarginRatio?: number;
+  maxCenterMotionRatio?: number;
+  maxSizeChangeRatio?: number;
+  maxAbsYaw?: number;
+  maxAbsPitch?: number;
+  maxAbsRoll?: number;
+  minQualityScore?: number;
+  minSharpnessScore?: number;
+  minBrightnessScore?: number;
+  maxBrightnessScore?: number;
+}
+
+export interface FaceCaptureMetrics {
+  availableMetrics: number;
+  faceWidthRatio: number;
+  centerOffsetX: number;
+  centerOffsetY: number;
+  stabilityScore: number;
+  poseScore: number;
+  qualityScore: number;
+  sharpnessScore: number;
+  brightnessScore: number;
+}
+
+export interface FaceCaptureProgress {
+  state: FaceCaptureState;
+  candidateCount: number;
+  frameId: number;
+  timestampMs: number;
+  trackId: number;
+  trackCount: number;
+  evaluatedFilters: number;
+  rejectReasons: number;
+  progress: number;
+  currentScore: number;
+  metrics: FaceCaptureMetrics;
+}
+
+export interface FaceCaptureResult {
+  frameId: number;
+  timestampMs: number;
+  trackId: number;
+  trackCount: number;
+  score: number;
+  rect: Rect;
+  roll: number;
+  yaw: number;
+  pitch: number;
+  token: Uint8Array;
+  metrics: FaceCaptureMetrics;
+}
+
 export interface ResourcePackInfo {
   archiveFileCount: number;
   modelCount: number;
@@ -335,10 +443,17 @@ interface ImageBitmapState {
   closed: boolean;
 }
 
+interface FaceCaptureSessionState {
+  handle: NativeFaceCaptureHandle;
+  closed: boolean;
+}
+
 const sessionStates: WeakMap<Session, SessionState> = new WeakMap<Session, SessionState>();
 const imageStreamStates: WeakMap<ImageStream, ImageStreamState> = new WeakMap<ImageStream, ImageStreamState>();
 const faceResultStates: WeakMap<FaceTrackResult, FaceResultState> = new WeakMap<FaceTrackResult, FaceResultState>();
 const imageBitmapStates: WeakMap<ImageBitmap, ImageBitmapState> = new WeakMap<ImageBitmap, ImageBitmapState>();
+const faceCaptureStates: WeakMap<FaceCaptureSession, FaceCaptureSessionState> =
+  new WeakMap<FaceCaptureSession, FaceCaptureSessionState>();
 
 function requireSessionState(session: Session): SessionState {
   const state: SessionState | undefined = sessionStates.get(session);
@@ -368,6 +483,14 @@ function requireImageBitmapState(bitmap: ImageBitmap): ImageBitmapState {
   const state: ImageBitmapState | undefined = imageBitmapStates.get(bitmap);
   if (state === undefined || state.closed) {
     throw new Error('InspireFace image bitmap has already been closed');
+  }
+  return state;
+}
+
+function requireFaceCaptureState(capture: FaceCaptureSession): FaceCaptureSessionState {
+  const state: FaceCaptureSessionState | undefined = faceCaptureStates.get(capture);
+  if (state === undefined || state.closed) {
+    throw new Error('InspireFace face capture session has already been closed');
   }
   return state;
 }
@@ -570,6 +693,57 @@ export class Session {
 
   public isClosed(): boolean {
     const state: SessionState | undefined = sessionStates.get(this);
+    return state === undefined || state.closed;
+  }
+}
+
+/**
+ * Synchronous capture policy attached to a Session. It owns no camera or worker
+ * thread. Pass an existing FaceTrackResult to update() to avoid tracking twice.
+ */
+export class FaceCaptureSession {
+  public constructor(session: Session, config: FaceCaptureConfig = {}) {
+    const handle: NativeFaceCaptureHandle = native.createFaceCaptureSession(
+      requireSessionState(session).handle, config);
+    faceCaptureStates.set(this, { handle: handle, closed: false });
+  }
+
+  public static getDefaultConfig(): FaceCaptureConfig {
+    return native.getDefaultFaceCaptureConfig();
+  }
+
+  /** A supplied FaceTrackResult must describe this frame; its trackCount is immutable. */
+  public update(image: ImageStream, frameId: number, timestampMs: number,
+    faces?: FaceTrackResult): FaceCaptureProgress {
+    const capture: FaceCaptureSessionState = requireFaceCaptureState(this);
+    const stream: ImageStreamState = requireImageStreamState(image);
+    const faceHandle: NativeFaceResultHandle | null = faces === undefined
+      ? null
+      : requireFaceResultState(faces).handle;
+    return native.updateFaceCaptureSession(capture.handle, stream.handle, faceHandle, frameId, timestampMs);
+  }
+
+  public getResults(): FaceCaptureResult[] {
+    return native.getFaceCaptureResults(requireFaceCaptureState(this).handle);
+  }
+
+  public finish(): FaceCaptureProgress {
+    return native.finishFaceCaptureSession(requireFaceCaptureState(this).handle);
+  }
+
+  public reset(): void {
+    native.resetFaceCaptureSession(requireFaceCaptureState(this).handle);
+  }
+
+  public close(): void {
+    const state: FaceCaptureSessionState | undefined = faceCaptureStates.get(this);
+    if (state === undefined || state.closed) return;
+    native.releaseFaceCaptureSession(state.handle);
+    state.closed = true;
+  }
+
+  public isClosed(): boolean {
+    const state: FaceCaptureSessionState | undefined = faceCaptureStates.get(this);
     return state === undefined || state.closed;
   }
 }

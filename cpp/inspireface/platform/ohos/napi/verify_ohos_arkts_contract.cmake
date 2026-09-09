@@ -38,6 +38,30 @@ foreach(export_name IN LISTS expected_exports)
     endif()
 endforeach()
 
+# Keep the capture policy's ABI-reused track-count fields synchronized across
+# the fixed C layout, Node-API mapper, native declaration, and public ArkTS API.
+foreach(capture_marker IN ITEMS
+        "HFUInt32 minTrackCount"
+        "HInt32 trackCount")
+    string(FIND "${c_api_header}" "${capture_marker}" marker_offset)
+    if(marker_offset EQUAL -1)
+        message(FATAL_ERROR "C face capture track-count marker is missing: ${capture_marker}")
+    endif()
+endforeach()
+foreach(capture_marker IN ITEMS
+        "\"minTrackCount\""
+        "progress.trackCount")
+    string(FIND "${napi_source}" "${capture_marker}" marker_offset)
+    if(marker_offset EQUAL -1)
+        message(FATAL_ERROR "Node-API face capture track-count marker is missing: ${capture_marker}")
+    endif()
+endforeach()
+string(FIND "${napi_declaration}" "minTrackCount?: number" declaration_track_count_offset)
+string(FIND "${arkts_wrapper}" "minTrackCount?: number" wrapper_track_count_offset)
+if(declaration_track_count_offset EQUAL -1 OR wrapper_track_count_offset EQUAL -1)
+    message(FATAL_ERROR "HarmonyOS face capture minTrackCount type is not bridged")
+endif()
+
 string(REGEX MATCHALL "HYPER_CAPI_EXPORT[^\n]*HF[A-Za-z0-9_]+\\(" c_api_declarations "${c_api_header}")
 set(c_api_symbols)
 foreach(c_api_declaration IN LISTS c_api_declarations)
